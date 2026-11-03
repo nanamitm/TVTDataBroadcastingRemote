@@ -6,7 +6,7 @@ param(
     [string]$Java = 'C:\Program Files\Android\Android Studio\jbr',
     [string]$CMake = 'C:\Qt\Tools\CMake_64\bin\cmake.exe',
     [string]$Ninja = 'C:\Qt\Tools\Ninja',
-    [string]$BuildDirectory = 'build/android-arm64-lan'
+    [string]$BuildDirectory = 'build/android-arm64'
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

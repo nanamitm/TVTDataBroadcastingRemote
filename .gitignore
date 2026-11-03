@@ -4,3 +4,31 @@
 *.user
 *.apk
 *.aab
+
+# Local IDE, CMake and environment settings
+/.vs/
+/.idea/
+/.vscode/
+CMakeUserPresets.json
+CMakeLists.txt.user*
+.env
+.env.*
+!.env.example
+
+# Generated binaries, packages and Android signing material
+*.exe
+*.dll
+*.obj
+*.o
+*.pdb
+*.zip
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# OS metadata
+Thumbs.db
+.DS_Store

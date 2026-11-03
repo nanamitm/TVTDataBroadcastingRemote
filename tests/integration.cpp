@@ -139,10 +139,10 @@ private slots:
         for (const auto& o : client.messages) if (o["type"] == "targets") QCOMPARE(o["targets"].toArray().size(), 0);
     }
     void migratesPreviousConnectionSettings() {
-        QSettings settings; settings.setValue("url", "wss://192.168.10.9:18765");
+        QSettings settings; settings.setValue("url", "wss://192.0.2.10:18765");
         settings.setValue("fingerprint", QString(64, 'a')); settings.sync();
         RemoteClient app;
-        QCOMPARE(app.savedUrl(), QString("ws://192.168.10.9:18765"));
+        QCOMPARE(app.savedUrl(), QString("ws://192.0.2.10:18765"));
         QVERIFY(!QSettings().contains("fingerprint"));
     }
     void routingOwnershipAndDisconnect() {
