@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtQuick.Shapes
 
 ApplicationWindow {
     id: window
@@ -20,6 +21,35 @@ ApplicationWindow {
         enabled: remote.connected && remote.selected.length > 0
         font.pixelSize: 19
         onClicked: remote.press(remoteKey)
+    }
+
+    component DirectionButton: RemoteButton {
+        id: directionButton
+        property int arrowRotation: 0
+        Accessible.name: text
+        autoRepeat: true
+        autoRepeatDelay: 450
+        autoRepeatInterval: 160
+        contentItem: Item {
+            implicitWidth: 36
+            implicitHeight: 36
+            Shape {
+                anchors.centerIn: parent
+                width: 24
+                height: 24
+                rotation: directionButton.arrowRotation
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    strokeWidth: -1
+                    fillColor: directionButton.enabled ? "#f4f7fa" : "#5a6977"
+                    startX: 12
+                    startY: 2
+                    PathLine { x: 23; y: 22 }
+                    PathLine { x: 1; y: 22 }
+                    PathLine { x: 12; y: 2 }
+                }
+            }
+        }
     }
 
     header: ToolBar {
@@ -80,13 +110,13 @@ ApplicationWindow {
                 columnSpacing: 10
                 rowSpacing: 10
                 RemoteButton { text: "d"; remoteKey: "data"; font.bold: true }
-                RemoteButton { text: "▲"; remoteKey: "up"; autoRepeat: true; autoRepeatDelay: 450; autoRepeatInterval: 160 }
+                DirectionButton { text: "上"; remoteKey: "up"; arrowRotation: 0 }
                 RemoteButton { text: "戻る"; remoteKey: "back" }
-                RemoteButton { text: "◀"; remoteKey: "left"; autoRepeat: true; autoRepeatDelay: 450; autoRepeatInterval: 160 }
+                DirectionButton { text: "左"; remoteKey: "left"; arrowRotation: 270 }
                 RemoteButton { text: "決定"; remoteKey: "enter"; Layout.minimumHeight: 72; highlighted: true }
-                RemoteButton { text: "▶"; remoteKey: "right"; autoRepeat: true; autoRepeatDelay: 450; autoRepeatInterval: 160 }
+                DirectionButton { text: "右"; remoteKey: "right"; arrowRotation: 90 }
                 Item { Layout.fillWidth: true }
-                RemoteButton { text: "▼"; remoteKey: "down"; autoRepeat: true; autoRepeatDelay: 450; autoRepeatInterval: 160 }
+                DirectionButton { text: "下"; remoteKey: "down"; arrowRotation: 180 }
                 Item { Layout.fillWidth: true }
             }
             RowLayout {
