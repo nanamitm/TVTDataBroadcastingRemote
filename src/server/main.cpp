@@ -7,6 +7,7 @@
 #include <QTextStream>
 #include <memory>
 #ifdef Q_OS_WIN
+#include "SettingsWindow.h"
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -68,7 +69,7 @@ static int runWithTray(QApplication& app, Broker& broker, ServerSettings& settin
     QObject::connect(stop, &QPushButton::clicked, &app, &QCoreApplication::quit);
     QMenu menu;
     auto* show = menu.addAction(QStringLiteral("設定"));
-    QObject::connect(show, &QAction::triggered, &status, [&status] { status.show(); status.raise(); status.activateWindow(); });
+    QObject::connect(show, &QAction::triggered, &status, [&status] { showSettingsWindow(&status); });
     menu.addSeparator();
     QObject::connect(menu.addAction(QStringLiteral("終了")), &QAction::triggered, &app, &QCoreApplication::quit);
     QSystemTrayIcon tray(icon);
@@ -88,15 +89,15 @@ static int runWithTray(QApplication& app, Broker& broker, ServerSettings& settin
             : QStringLiteral("待受ポートを変更・保存しました。アプリの接続URLも %1 に変更してください。").arg(endpoint));
     });
     QObject::connect(&tray, &QSystemTrayIcon::activated, &status, [&status](QSystemTrayIcon::ActivationReason reason) {
-        if (reason == QSystemTrayIcon::DoubleClick) { status.show(); status.raise(); status.activateWindow(); }
+        if (reason == QSystemTrayIcon::DoubleClick) showSettingsWindow(&status);
     });
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         tray.show();
-        if (showWindow) status.show();
+        if (showWindow) showSettingsWindow(&status);
     }
     else {
         QObject::connect(&status, &QDialog::finished, &app, &QCoreApplication::quit);
-        status.show();
+        showSettingsWindow(&status);
     }
     return app.exec();
 }
