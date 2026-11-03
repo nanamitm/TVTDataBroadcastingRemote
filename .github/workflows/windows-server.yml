@@ -1,0 +1,109 @@
+name: Windows Server Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-server:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QT_VERSION: '6.11.1'
+      # Official qtbase v6.11.1 source, used only for matching license texts.
+      QTBASE_LICENSES_REF: 59c81a3c2247b821b9b84b4eb8d939b77e07e276
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Qt and MinGW
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_mingw
+          modules: qtwebsockets qtshadertools
+          tools: tools_mingw1310,qt.tools.win64_mingw1310
+          cache: true
+
+      - name: Locate build tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja --no-progress -y
+          }
+          $qtBase = Split-Path (Split-Path $env:QT_ROOT_DIR)
+          $compiler = Join-Path $qtBase 'Tools/mingw1310_64/bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $compiler 'g++.exe'))) { throw 'Qt MinGW compiler not found' }
+          "REMOTE_COMPILER=$compiler" >> $env:GITHUB_ENV
+          "REMOTE_CMAKE=$((Get-Command cmake).Source)" >> $env:GITHUB_ENV
+          "REMOTE_NINJA=$(Split-Path (Get-Command ninja).Source)" >> $env:GITHUB_ENV
+
+      - name: Fetch Qt license texts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          git init build/qt-source/qtbase
+          git -C build/qt-source/qtbase sparse-checkout init --cone
+          git -C build/qt-source/qtbase sparse-checkout set LICENSES
+          git -C build/qt-source/qtbase fetch --depth 1 --filter=blob:none https://github.com/qt/qtbase.git $env:QTBASE_LICENSES_REF
+          git -C build/qt-source/qtbase checkout --detach FETCH_HEAD
+
+      - name: Build and test
+        run: |
+          ./scripts/Build-Windows.ps1 -Qt $env:QT_ROOT_DIR -Compiler $env:REMOTE_COMPILER -CMake $env:REMOTE_CMAKE -Ninja $env:REMOTE_NINJA
+
+      - name: Package server and verify standalone startup
+        run: |
+          ./scripts/Package-Windows.ps1 -Qt $env:QT_ROOT_DIR -Compiler $env:REMOTE_COMPILER -QtSources ./build/qt-source -OutputDirectory ./build/package/windows-server -ServerOnly
+          ./scripts/Test-WindowsServerPackage.ps1 -PackageDirectory ./build/package/windows-server
+
+      - name: Create release ZIP and SHA-256
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = Get-Content -LiteralPath CMakeLists.txt -Raw
+          $match = [regex]::Match($project, 'project\(TVTDataBroadcastingRemote VERSION ([0-9.]+)')
+          if (-not $match.Success) { throw 'Project version not found' }
+          $name = "TVTestRemoteServer-$($match.Groups[1].Value)-windows-x64.zip"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path ./build/package/windows-server/* -DestinationPath (Join-Path dist $name)
+          $hash = (Get-FileHash -LiteralPath (Join-Path dist $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -LiteralPath (Join-Path dist "$name.sha256") -Encoding ascii
+
+      - name: Upload server ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-server-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach server ZIP to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-test-results
+          path: build/windows/*test-results.txt
+          if-no-files-found: warn

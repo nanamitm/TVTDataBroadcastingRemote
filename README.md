@@ -31,6 +31,7 @@ LAN内でURLを指定して接続します。接続の認証、証明書、ペ�
 - [導入と接続](docs/getting-started.md)
 - [Windows・Androidのビルドと検証](docs/building.md)
 - [GitHub ActionsでAndroid署名APKを作成](docs/android-release.md)
+- [GitHub ActionsでWindowsサーバーZIPを作成](docs/windows-release.md)
 - [接続エージェントのサンプル](examples/README.md)
 - [プラグイン接続SDK](sdk/README.md)
 - [通信仕様](docs/protocol.md)

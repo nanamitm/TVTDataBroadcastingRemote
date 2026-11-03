@@ -11,6 +11,8 @@ Qt 6.8以上のCore / Network / WebSockets / Widgets / Quick / QuickControls2 / 
 ./scripts/Package-Windows.ps1
 ```
 
+サーバー専用ZIPのWorkflowとパッケージ検証は [Windowsサーバーの配布](windows-release.md) を参照してください。
+
 Qt Creatorから `CMakeLists.txt` を開くこともできます。スクリプトのパラメーターでQt・コンパイラ等の場所を変更できます。
 
 デモの実行方法は [examples/README.md](../examples/README.md) を参照してください。

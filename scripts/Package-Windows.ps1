@@ -2,7 +2,8 @@ param(
     [string]$Qt = 'C:\Qt\6.11.1\mingw_64',
     [string]$Compiler = 'C:\Qt\Tools\mingw1310_64\bin',
     [string]$QtSources = 'C:\Qt\6.11.1\Src',
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [switch]$ServerOnly
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -10,11 +11,17 @@ if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root 'build/package/w
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 $env:PATH = "$Qt\bin;$Compiler;" + $env:PATH
-foreach ($name in 'tvt-remote', 'tvt-remote-server', 'tvt-remote-demo', 'tvt-remote-native-demo') {
+$programs = if ($ServerOnly) { @('tvt-remote-server') } else { @('tvt-remote', 'tvt-remote-server', 'tvt-remote-demo', 'tvt-remote-native-demo') }
+foreach ($name in $programs) {
     Copy-Item -LiteralPath "$root/build/windows/$name.exe" -Destination $destination
 }
-& "$Qt/bin/windeployqt.exe" --release --compiler-runtime --no-translations --qmldir "$root/src/app" `
-    "$destination/tvt-remote.exe" "$destination/tvt-remote-server.exe" "$destination/tvt-remote-demo.exe"
+if ($ServerOnly) {
+    & "$Qt/bin/windeployqt.exe" --release --compiler-runtime --no-translations "$destination/tvt-remote-server.exe"
+    "[Paths]`nPrefix=.`nPlugins=.`n" | Set-Content -LiteralPath "$destination/qt.conf" -Encoding ascii
+} else {
+    & "$Qt/bin/windeployqt.exe" --release --compiler-runtime --no-translations --qmldir "$root/src/app" `
+        "$destination/tvt-remote.exe" "$destination/tvt-remote-server.exe" "$destination/tvt-remote-demo.exe"
+}
 if ($LASTEXITCODE -ne 0) { throw 'Qt deployment failed' }
 # Enables the app's --screenshot path for headless UI checks as well.
 Copy-Item -LiteralPath "$Qt/plugins/platforms/qoffscreen.dll" -Destination "$destination/platforms"
