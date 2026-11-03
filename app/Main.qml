@@ -13,6 +13,12 @@ ApplicationWindow {
     Material.theme: Material.Dark
     Material.accent: "#5ec9c1"
     color: "#111b25"
+    readonly property var selectedTarget: {
+        for (const target of remote.targets) {
+            if (target.id === remote.selected) return target
+        }
+        return null
+    }
 
     component RemoteButton: Button {
         property string remoteKey
@@ -59,7 +65,49 @@ ApplicationWindow {
             anchors.leftMargin: 16
             anchors.rightMargin: 12
             Label { text: "TVTest Remote"; font.pixelSize: 21; Layout.fillWidth: true }
-            ToolButton { text: "接続設定"; onClicked: settings.open() }
+            ToolButton {
+                id: settingsButton
+                implicitWidth: 48
+                implicitHeight: 48
+                Accessible.name: "接続設定"
+                ToolTip.text: "接続設定"
+                ToolTip.visible: hovered
+                onClicked: settings.open()
+                contentItem: Item {
+                    implicitWidth: 24
+                    implicitHeight: 24
+                    Item {
+                        width: 24
+                        height: 24
+                        anchors.centerIn: parent
+                        opacity: settingsButton.down ? 0.7 : 1
+                        Repeater {
+                            model: 8
+                            delegate: Item {
+                                required property int index
+                                anchors.fill: parent
+                                rotation: index * 45
+                                Rectangle {
+                                    x: 10; y: 1
+                                    width: 4; height: 6
+                                    radius: 0.7
+                                    color: "#edf4f8"
+                                    antialiasing: true
+                                }
+                            }
+                        }
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 16; height: 16
+                            radius: 8
+                            color: "transparent"
+                            border.width: 3
+                            border.color: "#edf4f8"
+                            antialiasing: true
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -70,38 +118,18 @@ ApplicationWindow {
             width: parent.width
             spacing: 10
             Label {
-                text: remote.status
+                text: window.selectedTarget && !remote.status.startsWith("操作結果:")
+                      && !remote.status.startsWith("接続エラー:")
+                      ? window.selectedTarget.name + " / " + window.selectedTarget.channel
+                      : remote.status
                 color: remote.connected ? "#88d5cc" : "#dfbc9c"
-                wrapMode: Text.Wrap
+                font.pixelSize: 14
+                elide: Text.ElideRight
                 Layout.fillWidth: true
-                Layout.margins: 14
-            }
-            Label { text: "操作先"; font.bold: true; Layout.leftMargin: 16 }
-            Repeater {
-                model: remote.targets
-                delegate: ItemDelegate {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 8
-                    Layout.rightMargin: 8
-                    text: (modelData.id === remote.selected ? "● " : "○ ")
-                        + modelData.name + "  /  " + modelData.channel
-                        + (modelData.busy && modelData.id !== remote.selected ? "（使用中）" : "")
-                    highlighted: modelData.id === remote.selected
-                    enabled: !modelData.busy || modelData.id === remote.selected
-                    onClicked: remote.claim(modelData.id)
-                }
-            }
-            Label {
-                visible: remote.connected && remote.targets.length === 0
-                text: "TVTestの接続を待っています"
                 Layout.leftMargin: 16
-            }
-            Label {
-                visible: remote.selected.length === 0
-                text: "操作するTVTestを選択してください"
-                color: "#a9b5c2"
-                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+                Layout.bottomMargin: 2
             }
             GridLayout {
                 columns: 3
@@ -141,22 +169,18 @@ ApplicationWindow {
                     }
                 }
             }
-            Button {
-                text: "操作権を解放"
-                enabled: remote.selected.length > 0
-                Layout.alignment: Qt.AlignHCenter
-                onClicked: remote.release()
-            }
         }
     }
 
     Dialog {
         id: settings
+        property string pendingTarget: ""
         anchors.centerIn: parent
         width: Math.min(window.width - 24, 430)
         height: Math.min(window.height - 32, implicitHeight)
-        title: "中継サーバーへ接続"
+        title: "接続設定"
         modal: true
+        onClosed: pendingTarget = ""
         header: Label { text: settings.title; color: "#edf4f8"; font.pixelSize: 20; padding: 18 }
         footer: DialogButtonBox {
             background: Rectangle { color: "#1d2936"; radius: 16 }
@@ -174,13 +198,97 @@ ApplicationWindow {
                 spacing: 12
                 Label { text: "サーバーURL" }
                 TextField { id: url; text: remote.savedUrl; placeholderText: "ws://192.168.1.10:18765"; Layout.fillWidth: true; inputMethodHints: Qt.ImhUrlCharactersOnly }
-                Label { text: "同じLAN内のPCのアドレスを入力してください。"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#a9b5c2" }
-                Button {
-                    text: "接続"
+                RowLayout {
                     Layout.fillWidth: true
-                    onClicked: { remote.connectTo(url.text); settings.close() }
+                    Button {
+                        text: remote.connected ? "再接続" : "接続"
+                        Layout.fillWidth: true
+                        onClicked: { settings.pendingTarget = ""; remote.connectTo(url.text) }
+                    }
+                    Button {
+                        text: "切断"
+                        Layout.fillWidth: true
+                        onClicked: { settings.pendingTarget = ""; remote.disconnectFromServer() }
+                    }
                 }
-                Button { text: "切断"; Layout.fillWidth: true; onClicked: { remote.disconnectFromServer(); settings.close() } }
+                Label {
+                    text: remote.status
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    color: remote.connected ? "#88d5cc" : "#dfbc9c"
+                    font.pixelSize: 13
+                }
+                Rectangle { visible: remote.connected; Layout.fillWidth: true; height: 1; color: "#344657" }
+                Label { visible: remote.connected; text: "操作するTVTest"; font.bold: true }
+                Repeater {
+                    model: remote.targets
+                    delegate: ItemDelegate {
+                        id: targetChoice
+                        required property var modelData
+                        Layout.fillWidth: true
+                        highlighted: modelData.id === remote.selected
+                        enabled: !modelData.busy || modelData.id === remote.selected
+                        Accessible.name: modelData.name + " / " + modelData.channel
+                        onClicked: {
+                            if (modelData.id === remote.selected) settings.close()
+                            else {
+                                settings.pendingTarget = modelData.id
+                                remote.claim(modelData.id)
+                            }
+                        }
+                        contentItem: RowLayout {
+                            spacing: 10
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                width: 18; height: 18; radius: 9
+                                color: "transparent"
+                                border.width: 2
+                                border.color: targetChoice.modelData.id === remote.selected ? "#5ec9c1" : "#a9b5c2"
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 8; height: 8; radius: 4
+                                    color: "#5ec9c1"
+                                    visible: targetChoice.modelData.id === remote.selected
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                Label { text: targetChoice.modelData.name; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Label {
+                                    text: targetChoice.modelData.channel
+                                          + (targetChoice.modelData.busy && targetChoice.modelData.id !== remote.selected ? "（使用中）" : "")
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    font.pixelSize: 13
+                                    color: "#a9b5c2"
+                                }
+                            }
+                        }
+                    }
+                }
+                Label {
+                    visible: remote.connected && remote.targets.length === 0
+                    text: "TVTestの接続を待っています"
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    color: "#a9b5c2"
+                }
+                Button {
+                    visible: remote.selected.length > 0
+                    text: "操作権を解放"
+                    Layout.fillWidth: true
+                    onClicked: { settings.pendingTarget = ""; remote.release() }
+                }
+            }
+        }
+    }
+    Connections {
+        target: remote
+        function onChanged() {
+            if (settings.pendingTarget.length > 0 && remote.selected === settings.pendingTarget) {
+                settings.pendingTarget = ""
+                settings.close()
             }
         }
     }
