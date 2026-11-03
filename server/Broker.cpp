@@ -9,16 +9,10 @@
 namespace {
 qint64 now() { return QDateTime::currentMSecsSinceEpoch(); }
 QString uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
-bool equalToken(const QByteArray& a, const QByteArray& b) {
-    if (a.size() != b.size()) return false;
-    unsigned char difference = 0;
-    for (qsizetype i = 0; i < a.size(); ++i) difference |= a[i] ^ b[i];
-    return difference == 0;
 }
-}
-Broker::Broker(const QByteArray& token, bool tls, QObject* parent)
-    : QObject(parent), m_token(token), m_tls(tls),
-      m_ws(QStringLiteral("TVTest Remote"), tls ? QWebSocketServer::SecureMode : QWebSocketServer::NonSecureMode, this),
+Broker::Broker(QObject* parent)
+    : QObject(parent),
+      m_ws(QStringLiteral("TVTest Remote"), QWebSocketServer::NonSecureMode, this),
       m_local(this) {
     connect(&m_local, &QLocalServer::newConnection, this, &Broker::acceptAgents);
     connect(&m_ws, &QWebSocketServer::newConnection, this, &Broker::acceptClients);
@@ -28,9 +22,7 @@ Broker::Broker(const QByteArray& token, bool tls, QObject* parent)
     m_local.setSocketOptions(QLocalServer::UserAccessOption);
     m_local.setMaxPendingConnections(16);
 }
-bool Broker::start(const QHostAddress& address, quint16 port, const QString& pipe, const QSslConfiguration& ssl) {
-    if (!Remote::validToken(m_token)) { m_error = "Token must be 3 ASCII digits or 32-4096 bytes"; return false; }
-    if (!m_tls && !address.isLoopback()) { m_error = "LAN connections require TLS (--cert and --key)"; return false; }
+bool Broker::start(const QHostAddress& address, quint16 port, const QString& pipe) {
     // Windows permits multiple named-pipe servers with the same name. Serialize
     // brokers explicitly so TVTest instances never attach to different brokers.
     const auto directory = QDir::tempPath() + "/TVTDataBroadcastingRemote";
@@ -39,7 +31,6 @@ bool Broker::start(const QHostAddress& address, quint16 port, const QString& pip
         QCryptographicHash::hash(pipe.toUtf8(), QCryptographicHash::Sha256).toHex()) + ".lock");
     m_lock->setStaleLockTime(0);
     if (!m_lock->tryLock()) { m_error = "A broker already owns this IPC name (or its lock is inaccessible)"; return false; }
-    if (m_tls) m_ws.setSslConfiguration(ssl);
     if (!m_local.listen(pipe)) { m_error = "IPC: " + m_local.errorString(); m_lock.reset(); return false; }
     if (!m_ws.listen(address, port)) { m_error = "WebSocket: " + m_ws.errorString(); m_local.close(); m_lock.reset(); return false; }
     m_timer.start(1000);
@@ -122,10 +113,10 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
 }
 void Broker::acceptClients() {
     while (auto* s = m_ws.nextPendingConnection()) {
-        if (m_clients.size() >= 16 || !s->origin().isEmpty()) { s->close(); s->deleteLater(); continue; }
+        if (m_clients.size() >= 16) { s->close(); s->deleteLater(); continue; }
         s->setMaxAllowedIncomingMessageSize(Remote::MaxMessage);
         s->setMaxAllowedIncomingFrameSize(Remote::MaxMessage);
-        m_clients.insert(s, Client{false, {}, now()});
+        m_clients.insert(s, Client{{}, now()});
         connect(s, &QWebSocket::textMessageReceived, this, [this, s](const QString& text) { clientMessage(s, text); });
         connect(s, &QWebSocket::binaryMessageReceived, this, [s] { s->close(); });
         connect(s, &QWebSocket::pong, this, [this, s] { if (m_clients.contains(s)) m_clients[s].last = now(); });
@@ -135,6 +126,9 @@ void Broker::acceptClients() {
             for (const auto& request : requests) if (m_pending[request].client == s) m_pending.remove(request);
             s->deleteLater();
         });
+        auto ready = Remote::message("ready");
+        ready["serverTime"] = static_cast<double>(now());
+        send(s, ready); sendTargets(s);
     }
 }
 void Broker::release(QWebSocket* s) {
@@ -152,24 +146,6 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
     const auto timestamp = now();
     if (timestamp - c.window >= 1000) { c.window = timestamp; c.count = 0; }
     if (++c.count > 30) { s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Rate limit"); return; }
-    if (!c.authenticated) {
-        // A three-digit code has a small search space. Count failures across
-        // connections and retain the lock until an explicit broker restart.
-        // Existing authenticated connections and IPC agents remain available.
-        if (m_token.size() == 3 && m_failedAuthentications >= 5) {
-            s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Authentication locked; restart server"); return;
-        }
-        if (type != "auth" || !equalToken(o["token"].toString().toUtf8(), m_token)) {
-            ++m_failedAuthentications;
-            s->close(QWebSocketProtocol::CloseCodePolicyViolated,
-                m_token.size() == 3 && m_failedAuthentications >= 5
-                    ? "Authentication locked; restart server" : "Authentication failed"); return;
-        }
-        c.authenticated = true; c.last = timestamp;
-        auto authenticated = Remote::message("authenticated");
-        authenticated["serverTime"] = static_cast<double>(timestamp);
-        send(s, authenticated); sendTargets(s); return;
-    }
     c.last = timestamp;
     if (type == "list") { sendTargets(s); return; }
     if (type == "release") {
@@ -230,7 +206,7 @@ void Broker::sendTargets(QWebSocket* s) {
     auto o = Remote::message("targets"); o["targets"] = targets; send(s, o);
 }
 void Broker::broadcastTargets() {
-    for (auto* s : m_clients.keys()) if (m_clients.value(s).authenticated) sendTargets(s);
+    for (auto* s : m_clients.keys()) sendTargets(s);
 }
 void Broker::tick() {
     const auto timestamp = now();
@@ -239,8 +215,8 @@ void Broker::tick() {
     const auto clients = m_clients.keys();
     for (auto* s : clients) {
         const auto c = m_clients.value(s);
-        if (timestamp - c.last > (c.authenticated ? 15000 : 5000)) s->abort();
-        else if (c.authenticated) s->ping();
+        if (timestamp - c.last > 15000) s->abort();
+        else s->ping();
     }
     const auto requests = m_pending.keys();
     for (const auto& request : requests) if (m_pending[request].expires <= timestamp) {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TVTDataBroadcastingRemote VERSION 0.1.1 LANGUAGES CXX)
+project(TVTDataBroadcastingRemote VERSION 0.2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network WebSockets)
@@ -52,10 +52,6 @@ if(NOT ANDROID)
         target_link_libraries(remote-tests PRIVATE remote_broker remote_client Qt6::Test)
         add_dependencies(remote-tests tvt-remote-server)
         target_compile_definitions(remote-tests PRIVATE REMOTE_SERVER_PATH="$<TARGET_FILE:tvt-remote-server>")
-        find_program(REMOTE_OPENSSL_EXECUTABLE NAMES openssl HINTS "C:/Program Files/Git/usr/bin")
-        if(REMOTE_OPENSSL_EXECUTABLE)
-            target_compile_definitions(remote-tests PRIVATE REMOTE_TEST_OPENSSL="${REMOTE_OPENSSL_EXECUTABLE}")
-        endif()
         if(WIN32)
             target_include_directories(remote-tests PRIVATE sdk third_party)
         endif()
@@ -82,15 +78,9 @@ if(REMOTE_BUILD_APP)
             QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
-            QT_ANDROID_VERSION_CODE 2
+            QT_ANDROID_VERSION_CODE 3
             QT_ANDROID_MIN_SDK_VERSION 28
             QT_ANDROID_TARGET_SDK_VERSION 35)
         qt_add_android_permission(tvt-remote NAME android.permission.INTERNET)
-        set(REMOTE_ANDROID_OPENSSL "" CACHE PATH "Path to KDAB/android_openssl checkout")
-        if(NOT EXISTS "${REMOTE_ANDROID_OPENSSL}/CMakeLists.txt")
-            message(FATAL_ERROR "Set REMOTE_ANDROID_OPENSSL for Android WSS support")
-        endif()
-        include(${REMOTE_ANDROID_OPENSSL}/CMakeLists.txt)
-        set_property(TARGET tvt-remote APPEND PROPERTY QT_ANDROID_EXTRA_LIBS ${ANDROID_EXTRA_LIBS})
     endif()
 endif()

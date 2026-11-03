@@ -5,18 +5,18 @@ param(
     [string]$NdkVersion = '27.2.12479018',
     [string]$Java = 'C:\Program Files\Android\Android Studio\jbr',
     [string]$CMake = 'C:\Qt\Tools\CMake_64\bin\cmake.exe',
-    [string]$Ninja = 'C:\Qt\Tools\Ninja'
+    [string]$Ninja = 'C:\Qt\Tools\Ninja',
+    [string]$BuildDirectory = 'build/android-arm64-lan'
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$build = Join-Path $root 'build/android-arm64'
+$build = Join-Path $root $BuildDirectory
 $env:JAVA_HOME = $Java
 $env:PATH = "$Ninja;" + $env:PATH
 $ndk = Join-Path $Sdk "ndk/$NdkVersion"
 & $CMake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release `
     "-DCMAKE_TOOLCHAIN_FILE=$Qt/lib/cmake/Qt6/qt.toolchain.cmake" "-DQT_HOST_PATH=$HostQt" `
-    "-DANDROID_SDK_ROOT=$Sdk" "-DANDROID_NDK_ROOT=$ndk" "-DCMAKE_ANDROID_NDK=$ndk" `
-    "-DREMOTE_ANDROID_OPENSSL=$Sdk/android_openssl" -DREMOTE_BUILD_TESTS=OFF
+    "-DANDROID_SDK_ROOT=$Sdk" "-DANDROID_NDK_ROOT=$ndk" "-DCMAKE_ANDROID_NDK=$ndk" -DREMOTE_BUILD_TESTS=OFF
 if ($LASTEXITCODE -ne 0) { throw 'Android configuration failed' }
 & $CMake --build $build --target apk --parallel 6
 if ($LASTEXITCODE -ne 0) { throw 'Android build failed' }

@@ -1,56 +1,25 @@
 #include "Broker.h"
 #include <QCommandLineParser>
 #include <QCoreApplication>
-#include <QFile>
-#include <QRandomGenerator>
-#include <QSslCertificate>
-#include <QSslKey>
 #include <QTextStream>
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    app.setApplicationName("tvt-remote-server"); app.setApplicationVersion("0.1.1");
+    app.setApplicationName("tvt-remote-server"); app.setApplicationVersion("0.2.0");
     QCommandLineParser parser; parser.addHelpOption(); parser.addVersionOption();
-    parser.addOptions({{{"a", "address"}, "Listen IP; LAN requires TLS", "address", "127.0.0.1"},
+    parser.addOptions({{{"a", "address"}, "Listen IP", "address", "0.0.0.0"},
         {{"p", "port"}, "WebSocket port", "port", "18765"},
-        {"pipe", "Local IPC name", "name", Remote::PipeName},
-        {"token-file", "Token file (created if missing)", "file"},
-        {"cert", "TLS certificate PEM", "file"}, {"key", "TLS private key PEM", "file"}});
+        {"pipe", "Local IPC name", "name", Remote::PipeName}});
     if (!parser.parse(app.arguments())) { QTextStream(stderr) << parser.errorText() << '\n'; return 1; }
-    if (parser.isSet("help")) { QTextStream(stdout) << parser.helpText(); return 0; }
+    if (parser.isSet("help") || parser.isSet("help-all")) { QTextStream(stdout) << parser.helpText(); return 0; }
     if (parser.isSet("version")) { QTextStream(stdout) << app.applicationVersion() << '\n'; return 0; }
     auto fail = [](const QString& error) { QTextStream(stderr) << error << '\n'; return 1; };
-    const auto tokenPath = parser.value("token-file");
-    if (tokenPath.isEmpty()) return fail("--token-file is required; token contents are never logged");
-    QFile tokenFile(tokenPath);
-    if (!tokenFile.exists()) {
-        if (!tokenFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return fail("Cannot create token file: " + tokenFile.errorString());
-        tokenFile.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        const auto token = QStringLiteral("%1").arg(QRandomGenerator::system()->bounded(1000), 3, 10, QLatin1Char('0')).toLatin1();
-        if (tokenFile.write(token + '\n') != token.size() + 1) return fail("Cannot write token file");
-        tokenFile.close();
-    }
-    if (!tokenFile.open(QIODevice::ReadOnly)) return fail("Cannot read token file: " + tokenFile.errorString());
-    const auto token = tokenFile.read(4097).trimmed();
-    if (!Remote::validToken(token)) return fail("Token must be 3 ASCII digits or 32-4096 bytes");
-    const bool tls = parser.isSet("cert") || parser.isSet("key");
-    QSslConfiguration ssl = QSslConfiguration::defaultConfiguration();
-    if (tls) {
-        QFile certFile(parser.value("cert")), keyFile(parser.value("key"));
-        if (!certFile.open(QIODevice::ReadOnly) || !keyFile.open(QIODevice::ReadOnly)) return fail("Cannot read TLS certificate/key");
-        const QSslCertificate cert(certFile.readAll(), QSsl::Pem);
-        const auto keyData = keyFile.readAll();
-        QSslKey key(keyData, QSsl::Rsa); if (key.isNull()) key = QSslKey(keyData, QSsl::Ec);
-        if (cert.isNull() || key.isNull()) return fail("Invalid TLS certificate/key");
-        ssl.setLocalCertificate(cert); ssl.setPrivateKey(key); ssl.setPeerVerifyMode(QSslSocket::VerifyNone);
-        ssl.setProtocol(QSsl::TlsV1_2OrLater);
-    }
     QHostAddress address;
     bool ok = false; const auto port = parser.value("port").toUInt(&ok);
     if (!address.setAddress(parser.value("address")) || !ok || port > 65535) return fail("Invalid address/port");
-    Broker broker(token, tls);
-    if (!broker.start(address, quint16(port), parser.value("pipe"), ssl)) return fail(broker.errorString());
-    QTextStream(stdout) << (tls ? "WSS " : "WS ") << address.toString() << ':' << broker.port()
-        << " | IPC " << parser.value("pipe") << " | token file: " << tokenPath << Qt::endl;
+    Broker broker;
+    if (!broker.start(address, quint16(port), parser.value("pipe"))) return fail(broker.errorString());
+    QTextStream(stdout) << "WS " << address.toString() << ':' << broker.port()
+        << " | IPC " << parser.value("pipe") << Qt::endl;
     return app.exec();
 }

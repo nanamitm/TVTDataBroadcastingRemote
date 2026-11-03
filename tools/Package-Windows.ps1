@@ -18,8 +18,7 @@ foreach ($name in 'tvt-remote', 'tvt-remote-server', 'tvt-remote-demo', 'tvt-rem
 if ($LASTEXITCODE -ne 0) { throw 'Qt deployment failed' }
 # Enables the app's --screenshot path for headless UI checks as well.
 Copy-Item -LiteralPath "$Qt/plugins/platforms/qoffscreen.dll" -Destination "$destination/platforms"
-New-Item -ItemType Directory -Path "$destination/tools", "$destination/licenses/Qt", "$destination/docs" -Force | Out-Null
-Copy-Item -LiteralPath "$root/tools/New-ServerIdentity.ps1" -Destination "$destination/tools"
+New-Item -ItemType Directory -Path "$destination/licenses/Qt", "$destination/docs" -Force | Out-Null
 Copy-Item -LiteralPath "$root/README.md", "$root/LICENSE" -Destination $destination
 Copy-Item -LiteralPath "$root/docs/protocol.md" -Destination "$destination/docs"
 Get-ChildItem -LiteralPath "$QtSources/qtbase/LICENSES" -File | Copy-Item -Destination "$destination/licenses/Qt"

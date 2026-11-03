@@ -8,12 +8,6 @@ namespace Remote {
 inline constexpr int Version = 1;
 inline constexpr int MaxMessage = 16384;
 inline const QString PipeName = QStringLiteral("TVTDataBroadcastingRemote-v1");
-inline bool validToken(const QByteArray& token) {
-    if (token.size() >= 32 && token.size() <= 4096) return true;
-    if (token.size() != 3) return false;
-    for (char digit : token) if (digit < '0' || digit > '9') return false;
-    return true;
-}
 inline QJsonObject message(const char* type) {
     return {{"v", Version}, {"type", QLatin1String(type)}};
 }

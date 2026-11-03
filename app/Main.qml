@@ -124,7 +124,7 @@ ApplicationWindow {
         id: settings
         anchors.centerIn: parent
         width: Math.min(window.width - 24, 430)
-        height: Math.min(window.height - 32, 560)
+        height: Math.min(window.height - 32, 350)
         title: "中継サーバーへ接続"
         modal: true
         header: Label { text: settings.title; color: "#edf4f8"; font.pixelSize: 20; padding: 18 }
@@ -142,18 +142,14 @@ ApplicationWindow {
                 width: parent.width
                 spacing: 12
                 Label { text: "サーバーURL" }
-                TextField { id: url; text: remote.savedUrl; placeholderText: "wss://192.168.1.10:18765"; Layout.fillWidth: true; inputMethodHints: Qt.ImhUrlCharactersOnly }
-                Label { text: "接続コード（3桁・保存しません）" }
-                TextField { id: token; echoMode: TextInput.Password; placeholderText: "3桁の数字"; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData }
-                Label { text: "証明書 SHA-256 指紋" }
-                TextField { id: fingerprint; text: remote.savedFingerprint; Layout.fillWidth: true; placeholderText: "PCで確認した64桁の指紋"; inputMethodHints: Qt.ImhNoPredictiveText }
-                Label { text: "PCで確認した接続情報を入力してください。バックグラウンド移行時は切断します。"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#a9b5c2" }
+                TextField { id: url; text: remote.savedUrl; placeholderText: "ws://192.168.1.10:18765"; Layout.fillWidth: true; inputMethodHints: Qt.ImhUrlCharactersOnly }
+                Label { text: "同じLAN内のPCのアドレスを入力してください。"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#a9b5c2" }
                 Button {
                     text: "接続"
                     Layout.fillWidth: true
-                    onClicked: { remote.connectTo(url.text, token.text, fingerprint.text); token.clear(); settings.close() }
+                    onClicked: { remote.connectTo(url.text); settings.close() }
                 }
-                Button { text: "切断"; Layout.fillWidth: true; onClicked: { remote.disconnectFromServer(); token.clear(); settings.close() } }
+                Button { text: "切断"; Layout.fillWidth: true; onClicked: { remote.disconnectFromServer(); settings.close() } }
             }
         }
     }
