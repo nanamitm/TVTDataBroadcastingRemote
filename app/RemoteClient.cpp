@@ -87,6 +87,8 @@ void RemoteClient::connectTo(const QString& url) {
     QSettings settings;
     m_lastTarget = settings.value("targetUrl").toString() == parsed.toString()
         ? settings.value("targetId").toString() : QString();
+    m_lastToken = settings.value("targetUrl").toString() == parsed.toString()
+        ? settings.value("targetToken").toString() : QString();
     settings.setValue("url", parsed.toString());
     m_userDisconnected = false; m_wanted = m_active;
     if (m_active) openConnection();
@@ -125,8 +127,8 @@ void RemoteClient::claim(const QString& target) {
     auto o = Remote::message("claim"); o["target"] = target; send(o);
 }
 void RemoteClient::release() {
-    m_lastTarget.clear(); m_restorePending.clear();
-    QSettings settings; settings.remove("targetId"); settings.remove("targetUrl");
+    m_lastTarget.clear(); m_lastToken.clear(); m_restorePending.clear();
+    QSettings settings; settings.remove("targetId"); settings.remove("targetToken"); settings.remove("targetUrl");
     m_selected.clear(); emit changed();
     if (m_ready) send(Remote::message("release"));
 }
@@ -140,15 +142,25 @@ void RemoteClient::press(const QString& key) {
 }
 void RemoteClient::restoreSelection() {
     if (!m_ready || !m_selected.isEmpty() || m_restorePending.isEmpty()) return;
+    QVariantMap match;
+    int matches = 0;
     for (const auto& value : m_targets) {
         const auto target = value.toMap();
-        if (target.value("id").toString() != m_restorePending) continue;
-        const auto id = m_restorePending; m_restorePending.clear();
-        if (target.value("busy").toBool()) {
-            setStatus(QStringLiteral("前回のTVTestは別のリモコンが操作中です")); return;
-        }
-        claim(id); return;
+        if (m_lastToken.isEmpty() ? target.value("id").toString() != m_restorePending
+            : target.value("targetToken").toString() != m_lastToken) continue;
+        match = target; ++matches;
     }
+    if (matches == 0) return;
+    if (matches > 1 || match.value("identityConflict").toBool()) {
+        setStatus(QStringLiteral("操作先識別トークンが重複しています。設定を確認してください")); return;
+    }
+    m_restorePending.clear();
+    if (match.value("busy").toBool()) {
+        setStatus(QStringLiteral("前回のTVTestは別のリモコンが操作中です")); return;
+    }
+    auto o = Remote::message("claim"); o["target"] = match.value("id").toString();
+    if (!m_lastToken.isEmpty()) o["targetToken"] = m_lastToken;
+    send(o);
 }
 void RemoteClient::received(const QString& text) {
     QJsonObject o;
@@ -165,25 +177,34 @@ void RemoteClient::received(const QString& text) {
     } else if (type == "targets") {
         m_targets = o["targets"].toArray().toVariantList();
         bool found = false;
-        for (const auto& t : m_targets) if (t.toMap()["id"].toString() == m_selected) found = true;
+        for (const auto& t : m_targets) if (t.toMap()["id"].toString() == m_selected) {
+            found = true;
+            const auto token = t.toMap()["targetToken"].toString();
+            if (token != m_lastToken) { m_lastToken = token; QSettings().setValue("targetToken", token); }
+        }
         if (!found) m_selected.clear();
         emit changed();
         restoreSelection();
     } else if (type == "selection") {
         const auto status = o["status"].toString(); m_selected = o["target"].toString();
         if (status == "claimed") {
-            m_lastTarget = m_selected;
-            QSettings settings; settings.setValue("targetId", m_selected); settings.setValue("targetUrl", m_url.toString());
+            m_lastTarget = m_selected; m_lastToken.clear();
+            for (const auto& t : m_targets) if (t.toMap()["id"].toString() == m_selected)
+                m_lastToken = t.toMap()["targetToken"].toString();
+            QSettings settings; settings.setValue("targetId", m_selected); settings.setValue("targetToken", m_lastToken); settings.setValue("targetUrl", m_url.toString());
             setStatus(QStringLiteral("操作先を選択しました"));
         }
         else if (status == "busy") setStatus(QStringLiteral("別のリモコンが操作中です"));
         else {
             m_selected.clear();
+            if (status == "target_gone" && !m_lastToken.isEmpty()) m_restorePending = m_lastTarget;
+            if (status == "identity_conflict") m_restorePending = m_lastTarget;
             if (status == "released") {
-                m_lastTarget.clear(); m_restorePending.clear();
-                QSettings settings; settings.remove("targetId"); settings.remove("targetUrl");
+                m_lastTarget.clear(); m_lastToken.clear(); m_restorePending.clear();
+                QSettings settings; settings.remove("targetId"); settings.remove("targetToken"); settings.remove("targetUrl");
             }
-            setStatus(status == "target_gone" ? QStringLiteral("操作先が終了しました") : QStringLiteral("操作権を解放しました"));
+            setStatus(status == "identity_conflict" ? QStringLiteral("操作先識別トークンが重複しています。設定を確認してください")
+                : status == "target_gone" ? QStringLiteral("TVTestの再起動を待っています") : QStringLiteral("操作権を解放しました"));
         }
     } else if (type == "result") {
         const auto status = o["status"].toString(); emit commandResult(o["id"].toString(), status);

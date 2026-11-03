@@ -13,6 +13,7 @@
 #ifdef Q_OS_WIN
 #include <nlohmann/json.hpp>
 #include "Win32RemoteBridge.h"
+#include "TargetIdentity.h"
 #endif
 
 namespace {
@@ -20,10 +21,10 @@ QString pipeName() { return "tvt-remote-test-" + QUuid::createUuid().toString(QU
 class Agent : public QObject {
 public:
     QLocalSocket socket; QByteArray buffer; QString id; QList<QJsonObject> keys; bool acknowledge = true;
-    Agent(const QString& pipe, const QString& label) {
-        connect(&socket, &QLocalSocket::connected, this, [this, label] {
+    Agent(const QString& pipe, const QString& label, const QString& token = {}) {
+        connect(&socket, &QLocalSocket::connected, this, [this, label, token] {
             auto o = Remote::message("register"); o["name"] = label; o["channel"] = "Test";
-            o["enabled"] = true; o["mode"] = "bml"; send(o);
+            o["enabled"] = true; o["mode"] = "bml"; o["targetToken"] = token; send(o);
         });
         connect(&socket, &QLocalSocket::readyRead, this, [this] {
             buffer += socket.readAll();
@@ -84,6 +85,58 @@ private slots:
         QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 1);
         app.claim(a.id); QTRY_COMPARE(app.selected(), a.id); app.press("enter");
         QTRY_COMPARE(results.size(), 1); QCOMPARE(results[0][1].toString(), QString("dispatched"));
+    }
+    void stableIdentitySurvivesPluginRestartAndColdStart() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "First PID", "living-room"); QTRY_VERIFY(!a.id.isEmpty());
+        QString replacement;
+        {
+            RemoteClient app; app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+            QTRY_COMPARE(app.targets().size(), 1); app.claim(a.id); QTRY_COMPARE(app.selected(), a.id);
+            QCOMPARE(QSettings().value("targetToken").toString(), QString("living-room"));
+            a.socket.abort(); QTRY_COMPARE(app.targets().size(), 0); QVERIFY(app.selected().isEmpty());
+            Agent wrong(pipe, "Same label", "bedroom"); QTRY_VERIFY(!wrong.id.isEmpty());
+            QTRY_COMPARE(app.targets().size(), 1); QVERIFY(app.selected().isEmpty());
+            Agent restarted(pipe, "Different PID", "living-room"); QTRY_VERIFY(!restarted.id.isEmpty());
+            replacement = restarted.id; QVERIFY(replacement != a.id);
+            QTRY_COMPARE(app.selected(), replacement); QCOMPARE(restarted.keys.size(), 0);
+            app.press("enter"); QTRY_COMPARE(restarted.keys.size(), 1); QCOMPARE(wrong.keys.size(), 0);
+            app.setActive(false); QTRY_VERIFY(!app.connected());
+        }
+        Agent next(pipe, "Third PID", "living-room"); QTRY_VERIFY(!next.id.isEmpty());
+        RemoteClient cold; cold.start(); QTRY_COMPARE(cold.selected(), next.id); QCOMPARE(next.keys.size(), 0);
+    }
+    void duplicateIdentityBlocksAutomaticSelectionAndClaimRace() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "First", "shared"), duplicate(pipe, "Second", "shared");
+        QTRY_VERIFY(!a.id.isEmpty() && !duplicate.id.isEmpty());
+        const auto url = QString("ws://127.0.0.1:%1").arg(b.port());
+        QSettings settings; settings.setValue("url", url); settings.setValue("targetUrl", url);
+        settings.setValue("targetId", "old-session"); settings.setValue("targetToken", "shared");
+        RemoteClient app; app.start(); QTRY_COMPARE(app.targets().size(), 2);
+        QVERIFY(app.selected().isEmpty()); QVERIFY(app.status().contains(QStringLiteral("重複")));
+        QVERIFY(app.targets()[0].toMap()["identityConflict"].toBool());
+        Client stale(b.port()); QTRY_VERIFY(stale.has("ready"));
+        auto claim = Remote::message("claim"); claim["target"] = a.id; claim["targetToken"] = "shared";
+        stale.send(claim); QTRY_VERIFY(stale.has("selection", "identity_conflict"));
+        duplicate.socket.abort(); QTRY_COMPARE(app.selected(), a.id); QCOMPARE(a.keys.size(), 0);
+    }
+    void stableIdentityRespectsOtherOwner() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "TVTest", "living"); QTRY_VERIFY(!a.id.isEmpty());
+        Client owner(b.port()); QTRY_VERIFY(owner.has("ready")); owner.claim(a.id); QTRY_VERIFY(owner.has("selection", "claimed"));
+        const auto url = QString("ws://127.0.0.1:%1").arg(b.port());
+        QSettings settings; settings.setValue("url", url); settings.setValue("targetUrl", url);
+        settings.setValue("targetId", "previous-id"); settings.setValue("targetToken", "living");
+        RemoteClient app; app.start(); QTRY_COMPARE(app.targets().size(), 1); QVERIFY(app.selected().isEmpty());
+        QVERIFY(app.status().contains(QStringLiteral("操作中")));
+    }
+    void invalidIdentityIsNotTruncatedIntoAnotherIdentity() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        QVERIFY(Remote::validTargetToken("Room-1_2.3")); QVERIFY(!Remote::validTargetToken("room 1"));
+        Agent invalid(pipe, "Bad", QString(65, 'a')); QTRY_COMPARE(invalid.socket.state(), QLocalSocket::UnconnectedState);
+        Client client(b.port()); QTRY_VERIFY(client.has("targets"));
+        for (const auto& o : client.messages) if (o["type"] == "targets") QCOMPARE(o["targets"].toArray().size(), 0);
     }
     void migratesPreviousConnectionSettings() {
         QSettings settings; settings.setValue("url", "wss://192.168.10.9:18765");
@@ -254,11 +307,23 @@ private slots:
         QVERIFY(!process.readAllStandardError().isEmpty());
     }
 #ifdef Q_OS_WIN
+    void persistentPluginTokenIsConfigurable() {
+        const auto path = (m_temporary.path() + "/identity.ini").toStdWString();
+        std::wstring first, second;
+        QVERIFY(TvtRemote::LoadOrCreateTargetToken(path, first)); QVERIFY(TvtRemote::ValidTargetToken(first));
+        QVERIFY(TvtRemote::LoadOrCreateTargetToken(path, second)); QCOMPARE(first, second);
+        QVERIFY(WritePrivateProfileStringW(L"TVTDataBroadcastingWV2", L"RemoteTargetToken", L"living-room", path.c_str()));
+        QVERIFY(TvtRemote::LoadOrCreateTargetToken(path, second)); QCOMPARE(second, std::wstring(L"living-room"));
+        QVERIFY(WritePrivateProfileStringW(L"TVTDataBroadcastingWV2", L"RemoteTargetToken", L"invalid token", path.c_str()));
+        QVERIFY(!TvtRemote::LoadOrCreateTargetToken(path, second)); QVERIFY(second.empty());
+        QVERIFY(!TvtRemote::ValidTargetToken(L"")); QVERIFY(!TvtRemote::ValidTargetToken(std::wstring(65, L'a')));
+        QVERIFY(!TvtRemote::LoadOrCreateTargetToken((m_temporary.path() + "/missing/file.ini").toStdWString(), second));
+    }
     void nativeBridgeAndReconnect() {
         const auto pipe = pipeName();
         auto b = std::make_unique<Broker>(); QVERIFY(b->start(QHostAddress::LocalHost, 0, pipe));
         TvtRemote::Agent agent;
-        agent.UpdateState("Native TVTest", "Native channel", true, "bml");
+        agent.UpdateState("Native TVTest", "Native channel", true, "bml", "native-stable");
         QVERIFY(agent.Start(pipe.toStdWString()));
         RemoteClient c; QSignalSpy results(&c, &RemoteClient::commandResult);
         auto connectClient = [&] { c.connectTo(QString("ws://127.0.0.1:%1").arg(b->port())); };
@@ -270,10 +335,10 @@ private slots:
         QTRY_VERIFY((received = received || agent.Next(command))); QCOMPARE(QString::fromStdString(command.key), QString("red"));
         agent.Complete(command, true); QTRY_COMPARE(results.size(), 1);
         QCOMPARE(results[0][1].toString(), QString("dispatched"));
-        c.disconnectFromServer(); b.reset();
-        b = std::make_unique<Broker>(); QVERIFY(b->start(QHostAddress::LocalHost, 0, pipe));
-        connectClient(); QTRY_VERIFY(c.connected()); QTRY_COMPARE_WITH_TIMEOUT(c.targets().size(), 1, 5000);
-        const auto newId = c.targets()[0].toMap()["id"].toString(); QVERIFY(newId != id); QVERIFY(c.selected().isEmpty());
+        const auto port = b->port(); b.reset(); QTRY_VERIFY(!c.connected());
+        b = std::make_unique<Broker>(); QVERIFY(b->start(QHostAddress::LocalHost, port, pipe));
+        QTRY_VERIFY(c.connected()); QTRY_COMPARE_WITH_TIMEOUT(c.targets().size(), 1, 5000);
+        const auto newId = c.targets()[0].toMap()["id"].toString(); QVERIFY(newId != id); QTRY_COMPARE(c.selected(), newId);
         agent.Stop(); QTRY_COMPARE(c.targets().size(), 0);
     }
     void windowBridgeDispatchesOnUiThread() {
@@ -282,13 +347,14 @@ private slots:
         const auto mainThread = GetCurrentThreadId();
         DWORD dispatchThread = 0; QString pressed;
         QVERIFY(bridge.Start(GetModuleHandleW(nullptr), []() -> nlohmann::json {
-            return {{"name", "Window bridge"}, {"channel", "Test"}, {"enabled", true}, {"mode", "bml"}};
+            return {{"targetToken", "window-stable"}, {"name", "Window bridge"}, {"channel", "Test"}, {"enabled", true}, {"mode", "bml"}};
         }, [&](const std::string& key) {
             dispatchThread = GetCurrentThreadId(); pressed = QString::fromStdString(key); return true;
         }, pipe.toStdWString()));
         RemoteClient c; QSignalSpy results(&c, &RemoteClient::commandResult);
         c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
         QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.targets().size(), 1);
+        QCOMPARE(c.targets()[0].toMap()["targetToken"].toString(), QString("window-stable"));
         c.claim(c.targets()[0].toMap()["id"].toString()); QTRY_VERIFY(!c.selected().isEmpty());
         c.press("data"); QTRY_COMPARE(pressed, QString("data")); QCOMPARE(dispatchThread, mainThread);
         QTRY_COMPARE(results.size(), 1);

@@ -52,6 +52,7 @@ private:
     QUrl m_url;
     QString m_selected;
     QString m_lastTarget;
+    QString m_lastToken;
     QString m_restorePending;
     QString m_status = QStringLiteral("未接続");
     QVariantList m_targets;

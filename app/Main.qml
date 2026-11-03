@@ -265,6 +265,7 @@ ApplicationWindow {
                                 Label { text: targetChoice.modelData.name; Layout.fillWidth: true; elide: Text.ElideRight }
                                 Label {
                                     text: targetChoice.modelData.channel
+                                          + (targetChoice.modelData.identityConflict ? "（識別トークン重複）" : "")
                                           + (targetChoice.modelData.busy && targetChoice.modelData.id !== remote.selected ? "（使用中）" : "")
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight

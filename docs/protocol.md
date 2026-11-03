@@ -15,12 +15,12 @@ After the WebSocket handshake, the server immediately sends `ready`, followed by
 
 ```json
 {"v":1,"type":"ready","serverTime":1790000000000}
-{"v":1,"type":"targets","targets":[{"id":"<uuid>","name":"Living room","channel":"Station","pid":1234,"enabled":true,"mode":"bml","busy":false}]}
+{"v":1,"type":"targets","targets":[{"id":"<uuid>","name":"Living room","channel":"Station","pid":1234,"enabled":true,"mode":"bml","busy":false,"targetToken":"living-room","identityConflict":false}]}
 ```
 
 `serverTime` is Unix epoch milliseconds. The app records it with a monotonic timer to expire input after 1.5 seconds without depending on the phone's clock. App pings detect stalled connections after about 6 seconds.
 
-The target order is unspecified. Use IDs for identity and render labels as text. `busy` means a connection owns that target, possibly the current connection. Request another list with `{"v":1,"type":"list"}`.
+The target order is unspecified. Use IDs for current-session command routing and tokens for persistent identity; render labels as text. `busy` means a connection owns that target, possibly the current connection. Request another list with `{"v":1,"type":"list"}`.
 
 ## Operation ownership
 
@@ -29,9 +29,9 @@ The target order is unspecified. Use IDs for identity and render labels as text.
 {"v":1,"type":"selection","status":"claimed","target":"<uuid>"}
 ```
 
-Each target has one owner, identified by its WebSocket connection. Claim statuses: `claimed`, `busy`, `target_gone`. A failed claim preserves the previous selection and returns its ID (or an empty string). A successful switch releases the previous target.
+Each target has one owner, identified by its WebSocket connection. Claim statuses: `claimed`, `busy`, `target_gone`, `identity_conflict`. A failed claim preserves the previous selection and returns its ID (or an empty string). A successful switch releases the previous target.
 
-`release` yields `selection` status `released`. Agent disconnect yields `target_gone` and clears the selection. Client disconnect releases its claim. The server never carries ownership across connections. App 0.3.0+ can request a fresh claim after reconnect, but only for the previously selected exact target ID at the same URL, and only if it is available. It never substitutes another target by label or PID, takes an occupied target, or replays a key. Explicit release forgets the remembered target. This is routing arbitration, not authentication.
+`release` yields `selection` status `released`. Agent disconnect yields `target_gone` and clears the selection. Client disconnect releases its claim. The server never carries ownership across connections. App 0.3.0+ can request a fresh claim after reconnect, for the remembered identity at the same URL, and only if it is available (0.3.x uses the exact session ID; 0.4.0+ uses a unique persistent token when present). It never substitutes another target by label or PID, takes an occupied target, or replays a key. Explicit release forgets the remembered target. This is routing arbitration, not authentication.
 
 ## Keys
 
@@ -53,7 +53,7 @@ Each target has one owner, identified by its WebSocket connection. Claim statuse
 Register once per IPC connection. State updates use the same complete metadata with type `state`. Caller-supplied IDs are ignored.
 
 ```json
-{"v":1,"type":"register","name":"Living room","channel":"Station","pid":1234,"enabled":true,"mode":"bml"}
+{"v":1,"type":"register","targetToken":"living-room","name":"Living room","channel":"Station","pid":1234,"enabled":true,"mode":"bml"}
 {"v":1,"type":"registered","target":"<uuid>"}
 {"v":1,"type":"heartbeat"}
 ```
@@ -74,5 +74,11 @@ Only the recipient IPC connection may acknowledge a request. `dispatched`/`unava
 - 64 KiB maximum queued output per socket; the native SDK has 16-entry queues.
 - IPC lines are buffered across partial reads. Malformed or oversized input disconnects its sender.
 - SDK disconnects clear queues and change an internal generation. Old completions are ignored. The UI polls up to 4 commands per 50 ms without network waits.
-- Backgrounding disconnects the app. With auto-connect enabled, startup/resume reconnects to the saved URL and can restore an available exact target ID via a new claim. Manual disconnect is respected for the current app run. Keys are never restored or replayed.
+- Backgrounding disconnects the app. With auto-connect enabled, startup/resume reconnects to the saved URL and can restore a unique available `targetToken` via a new claim, falling back to the exact target ID for legacy plugins. Manual disconnect is respected for the current app run. Keys are never restored or replayed.
 - Input already handed to the plugin cannot always be cancelled by release/disconnect.
+
+## Persistent routing identity (0.4.0)
+
+`register` and `state` accept optional `targetToken` (empty for legacy plugins, otherwise 1-64 ASCII letters/digits, dot, underscore or hyphen, case-sensitive). Invalid values disconnect the agent; values are never truncated. Targets expose `targetToken` and `identityConflict`. This is public routing metadata, not authentication. Plugin INI key `RemoteTargetToken` persists across process restarts and is editable in plugin settings; an absent key is generated and saved once.
+
+A client remembers the token with its broker URL. When the selected agent disappears, it waits for a matching token and issues a new claim to its new session ID. Automatic claims include `targetToken`; the broker checks that the requested session still has that token and exactly one registered agent has it, preventing list/claim races. Duplicate tokens return `selection.status=identity_conflict`. Manual ID-only claims remain possible. A token is never used as the command target: key requests and pending results remain tied to the current session ID. Busy targets are not taken, and inputs are never replayed.

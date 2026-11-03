@@ -97,9 +97,11 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
     a.last = now();
     if (type == "register" || type == "state") {
         if (type == "register" && !a.id.isEmpty()) { s->abort(); return; }
+        const auto token = o["targetToken"].toString();
+        if ((o.contains("targetToken") && !o["targetToken"].isString()) || !Remote::validTargetToken(token)) { s->abort(); return; }
         if (type == "register") a.id = uuid();
         a.info = {{"id", a.id}, {"name", o["name"].toString().left(100)},
-            {"channel", o["channel"].toString().left(100)}, {"pid", o["pid"].toInt()},
+            {"targetToken", token}, {"channel", o["channel"].toString().left(100)}, {"pid", o["pid"].toInt()},
             {"enabled", o["enabled"].toBool()}, {"mode", o["mode"].toString().left(20)}};
         if (type == "register") { auto reply = Remote::message("registered"); reply["target"] = a.id; send(s, reply); }
         broadcastTargets();
@@ -156,6 +158,16 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         bool found = false;
         for (const auto& a : std::as_const(m_agents)) if (a.id == target && !target.isEmpty()) found = true;
         QString status = "target_gone";
+        if (found && o.contains("targetToken")) {
+            const auto token = o["targetToken"].toString();
+            int matches = 0; bool sameTarget = false;
+            for (const auto& a : std::as_const(m_agents)) if (!a.id.isEmpty() && a.info["targetToken"] == token) {
+                ++matches; sameTarget = sameTarget || a.id == target;
+            }
+            if (token.isEmpty() || !Remote::validTargetToken(token) || matches != 1 || !sameTarget) {
+                auto r = Remote::message("selection"); r["status"] = "identity_conflict"; r["target"] = c.selected; send(s, r); return;
+            }
+        }
         if (found) {
             if (m_owners.contains(target) && m_owners[target] != s) status = "busy";
             else { release(s); c.selected = target; m_owners[target] = s; status = "claimed"; }
@@ -201,7 +213,13 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
 void Broker::sendTargets(QWebSocket* s) {
     QJsonArray targets;
     for (const auto& a : std::as_const(m_agents)) if (!a.id.isEmpty()) {
-        auto info = a.info; info["busy"] = m_owners.contains(a.id); targets.append(info);
+        auto info = a.info; info["busy"] = m_owners.contains(a.id);
+        int matches = 0;
+        const auto token = info["targetToken"].toString();
+        if (!token.isEmpty()) for (const auto& other : std::as_const(m_agents))
+            if (!other.id.isEmpty() && other.info["targetToken"] == token) ++matches;
+        info["identityConflict"] = matches > 1;
+        targets.append(info);
     }
     auto o = Remote::message("targets"); o["targets"] = targets; send(s, o);
 }

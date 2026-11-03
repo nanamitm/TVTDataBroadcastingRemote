@@ -22,6 +22,15 @@ inline bool decode(const QByteArray& bytes, QJsonObject& object) {
     object = doc.object();
     return object.value("v").toInt(-1) == Version && object.value("type").isString();
 }
+inline bool validTargetToken(const QString& token) {
+    if (token.size() > 64) return false;
+    for (const auto c : token) {
+        const auto v = c.unicode();
+        if (!((v >= 'a' && v <= 'z') || (v >= 'A' && v <= 'Z')
+            || (v >= '0' && v <= '9') || v == '-' || v == '_' || v == '.')) return false;
+    }
+    return true; // Empty tokens keep compatibility with older plugins.
+}
 inline bool validKey(const QString& key) {
     static const QSet<QString> keys = {"data", "up", "down", "left", "right", "enter",
         "back", "blue", "red", "green", "yellow", "0", "1", "2", "3", "4", "5",

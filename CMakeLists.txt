@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TVTDataBroadcastingRemote VERSION 0.3.0 LANGUAGES CXX)
+project(TVTDataBroadcastingRemote VERSION 0.4.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network WebSockets)
@@ -54,6 +54,7 @@ if(NOT ANDROID)
         target_compile_definitions(remote-tests PRIVATE REMOTE_SERVER_PATH="$<TARGET_FILE:tvt-remote-server>")
         if(WIN32)
             target_include_directories(remote-tests PRIVATE sdk third_party)
+            target_link_libraries(remote-tests PRIVATE ole32)
         endif()
         add_test(NAME remote-integration COMMAND remote-tests -o test-results.txt,txt -o -,txt)
         set_tests_properties(remote-integration PROPERTIES TIMEOUT 45)
@@ -78,7 +79,7 @@ if(REMOTE_BUILD_APP)
             QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
-            QT_ANDROID_VERSION_CODE 7
+            QT_ANDROID_VERSION_CODE 8
             QT_ANDROID_MIN_SDK_VERSION 28
             QT_ANDROID_TARGET_SDK_VERSION 35)
         qt_add_android_permission(tvt-remote NAME android.permission.INTERNET)
