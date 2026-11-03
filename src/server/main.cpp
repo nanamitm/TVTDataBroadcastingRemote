@@ -67,7 +67,7 @@ static int runWithTray(QApplication& app, Broker& broker, ServerSettings& settin
     layout->addWidget(stop);
     QObject::connect(stop, &QPushButton::clicked, &app, &QCoreApplication::quit);
     QMenu menu;
-    auto* show = menu.addAction(QStringLiteral("状態を表示"));
+    auto* show = menu.addAction(QStringLiteral("設定"));
     QObject::connect(show, &QAction::triggered, &status, [&status] { status.show(); status.raise(); status.activateWindow(); });
     menu.addSeparator();
     QObject::connect(menu.addAction(QStringLiteral("終了")), &QAction::triggered, &app, &QCoreApplication::quit);
