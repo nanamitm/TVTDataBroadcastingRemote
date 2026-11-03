@@ -15,6 +15,8 @@ $stopStdout = [IO.Path]::GetTempFileName()
 $stopStderr = [IO.Path]::GetTempFileName()
 $server = $null
 $stop = $null
+$probe = $null
+$cancellation = $null
 function Read-PackageLog([string]$Path) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     $reader = [IO.StreamReader]::new($stream)
@@ -34,10 +36,19 @@ try {
     $ready = $false
     for ($attempt = 0; $attempt -lt 100; $attempt++) {
         if ($server.HasExited) { throw "Packaged server exited before startup: $(Read-PackageLog $stderr)" }
-        if ((Read-PackageLog $stdout) -match 'WS 127\.0\.0\.1:') { $ready = $true; break }
+        $endpoint = [regex]::Match((Read-PackageLog $stdout), 'WS (127\.0\.0\.1:[0-9]+)')
+        if ($endpoint.Success) { $ready = $true; break }
         Start-Sleep -Milliseconds 200
     }
     if (-not $ready) { throw "Packaged server did not start: $(Read-PackageLog $stderr)" }
+    # Listening begins before GUI setup completes. Wait for the event loop to
+    # serve an actual WebSocket handshake before testing the stop command.
+    $probe = [Net.WebSockets.ClientWebSocket]::new()
+    $probe.Options.Proxy = $null
+    $cancellation = [Threading.CancellationTokenSource]::new(15000)
+    $probe.ConnectAsync([Uri]("ws://" + $endpoint.Groups[1].Value), $cancellation.Token).GetAwaiter().GetResult()
+    $probe.Abort(); $probe.Dispose(); $probe = $null
+    Write-Output 'Packaged server completed a WebSocket handshake.'
     $stop = Start-Process -FilePath $executable -ArgumentList '--stop', '--pipe', $pipe -WorkingDirectory $package -WindowStyle Hidden `
         -RedirectStandardOutput $stopStdout -RedirectStandardError $stopStderr -PassThru
     $null = $stop.Handle
@@ -49,6 +60,8 @@ try {
     if ($server.ExitCode -ne 0) { throw "Packaged server exited with code $($server.ExitCode)" }
     Write-Output 'Windows server package started with an isolated PATH and shut down normally.'
 } finally {
+    if ($probe) { $probe.Abort(); $probe.Dispose() }
+    if ($cancellation) { $cancellation.Dispose() }
     if ($stop) {
         if (-not $stop.HasExited) { $stop.Kill(); $stop.WaitForExit() }
         $stop.Dispose()
