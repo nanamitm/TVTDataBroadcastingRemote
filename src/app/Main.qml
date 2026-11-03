@@ -302,6 +302,7 @@ ApplicationWindow {
         }
     }
     Component.onCompleted: {
+        if (japaneseFontFamily.length > 0) window.font.family = japaneseFontFamily
         remote.start()
         if (!remote.hasSavedConnection) settings.open()
     }

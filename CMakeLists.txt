@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TVTDataBroadcastingRemote VERSION 0.4.0 LANGUAGES CXX)
+project(TVTDataBroadcastingRemote VERSION 0.4.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network WebSockets)
@@ -89,13 +89,14 @@ if(REMOTE_BUILD_APP)
         set_property(SOURCE assets/icons/remote.rc PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/remote.ico")
     endif()
     if(ANDROID)
+        qt_add_resources(tvt-remote "japanese_font" PREFIX "/fonts" BASE "assets/fonts" FILES assets/fonts/NotoSansJP.ttf)
         set_target_properties(tvt-remote PROPERTIES
             QT_ANDROID_PACKAGE_NAME "io.github.nanamitm.tvtremote"
             QT_ANDROID_APP_NAME "TVTest Remote"
             QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
-            QT_ANDROID_VERSION_CODE 8
+            QT_ANDROID_VERSION_CODE 9
             QT_ANDROID_MIN_SDK_VERSION 28
             QT_ANDROID_TARGET_SDK_VERSION 35
             QT_ANDROID_COMPILE_SDK_VERSION 36

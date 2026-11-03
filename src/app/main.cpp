@@ -21,6 +21,20 @@ int main(int argc, char** argv) {
         const auto families = QFontDatabase::applicationFontFamilies(fontId);
         if (!families.isEmpty()) app.setFont(QFont(families.first(), 10));
     }
+    QString japaneseFontFamily;
+#ifdef Q_OS_ANDROID
+    // Pin Japanese glyph forms instead of relying on the device's CJK fallback.
+    const auto fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/NotoSansJP.ttf"));
+    const auto fontFamilies = QFontDatabase::applicationFontFamilies(fontId);
+    if (!fontFamilies.isEmpty()) {
+        japaneseFontFamily = fontFamilies.first();
+        QFont font = app.font();
+        font.setFamily(japaneseFontFamily);
+        font.setWeight(QFont::Normal);
+        app.setFont(font);
+        QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han, {japaneseFontFamily});
+    } else qWarning("Bundled Japanese UI font could not be loaded");
+#endif
     RemoteClient remote;
     remote.setActive(app.applicationState() != Qt::ApplicationHidden && app.applicationState() != Qt::ApplicationSuspended);
     QObject::connect(&app, &QGuiApplication::applicationStateChanged, &remote,
@@ -30,6 +44,7 @@ int main(int argc, char** argv) {
         });
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("remote", &remote);
+    engine.rootContext()->setContextProperty("japaneseFontFamily", japaneseFontFamily);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
     engine.loadFromModule("TVTRemote", "Main");
     const auto args = app.arguments();
