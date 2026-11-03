@@ -133,6 +133,7 @@ ApplicationWindow {
             }
             GridLayout {
                 columns: 3
+                uniformCellWidths: true
                 Layout.fillWidth: true
                 Layout.margins: 12
                 columnSpacing: 10
@@ -158,6 +159,7 @@ ApplicationWindow {
             }
             GridLayout {
                 columns: 3
+                uniformCellWidths: true
                 Layout.fillWidth: true
                 Layout.margins: 12
                 Repeater {
