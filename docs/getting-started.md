@@ -30,11 +30,21 @@ PowerShellのスクリプトで終了完了を待ってから次の処理へ進�
 
 登録にはユーザーの `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` を使用します。IPC名ごとに別の登録を管理します。登録コマンドがWindowsの260文字制限を超える場合は画面にエラーを表示します。[WindowsのRunキー仕様](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys)
 
+### 待受アドレスと起動オプション
+
 既定は `0.0.0.0:18765`、IPC名は `TVTDataBroadcastingRemote-v1` です。特定のIP・ポートを指定することもできます。
 
 ```powershell
 ./tvt-remote-server.exe --address 192.168.1.10 --port 18765
 ```
+
+### 待受ポートの変更
+
+サーバーの状態画面で「待受ポート」を1～65535の範囲で入力し、「適用」を押します。新しいポートの確保と設定保存に成功してから待受を切り替えます。使用中のポートや保存失敗の場合はエラーを表示し、元のポートで稼働を続けます。TVTestプラグインの接続は維持しますが、スマートフォンなどのリモコン接続は切断します。アプリの歯車から接続URLのポートも変更してください。
+
+設定は現在のユーザー・IPC名ごとに保存し、次回起動時に使用します。`--port` を明示した場合は保存値より優先し、`--port 0` は従来どおり一時的な自動割り当てです。自動起動を有効にしている場合は、登録済みの起動引数も新しいポートへ更新します。
+
+### リモコンアプリの接続
 
 AndroidアプリまたはWindows版 `tvt-remote.exe` の接続設定に `ws://PCのLAN内IP:18765` を入力し、一覧から操作するTVTestを選びます。
 

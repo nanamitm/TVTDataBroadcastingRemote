@@ -4,6 +4,7 @@
 #include <QLocalSocket>
 #include <QLockFile>
 #include <memory>
+#include <functional>
 #include <QPointer>
 #include <QTimer>
 #include <QWebSocket>
@@ -15,7 +16,8 @@ public:
     explicit Broker(QObject* parent = nullptr);
     ~Broker() override;
     bool start(const QHostAddress& address, quint16 port, const QString& pipe);
-    quint16 port() const { return m_ws.serverPort(); }
+    quint16 port() const { return m_ws->serverPort(); }
+    bool changePort(quint16 port, const std::function<bool(QString&)>& save = {});
     QString errorString() const { return m_error; }
 private:
     struct Agent { QByteArray buffer; QString id; QJsonObject info; qint64 last = 0; };
@@ -34,7 +36,8 @@ private:
     void tick();
     static void send(QWebSocket* socket, const QJsonObject& o);
     static void send(QLocalSocket* socket, const QJsonObject& o);
-    QWebSocketServer m_ws;
+    std::unique_ptr<QWebSocketServer> createListener();
+    std::unique_ptr<QWebSocketServer> m_ws;
     QLocalServer m_local;
     QTimer m_timer;
     std::unique_ptr<QLockFile> m_lock;

@@ -12,15 +12,31 @@ QString uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 }
 Broker::Broker(QObject* parent)
     : QObject(parent),
-      m_ws(QStringLiteral("TVTest Remote"), QWebSocketServer::NonSecureMode, this),
       m_local(this) {
     connect(&m_local, &QLocalServer::newConnection, this, &Broker::acceptAgents);
-    connect(&m_ws, &QWebSocketServer::newConnection, this, &Broker::acceptClients);
+    m_ws = createListener();
     connect(&m_timer, &QTimer::timeout, this, &Broker::tick);
-    m_ws.setHandshakeTimeout(5000);
-    m_ws.setMaxPendingConnections(8);
     m_local.setSocketOptions(QLocalServer::UserAccessOption);
     m_local.setMaxPendingConnections(16);
+}
+std::unique_ptr<QWebSocketServer> Broker::createListener() {
+    auto listener = std::make_unique<QWebSocketServer>(QStringLiteral("TVTest Remote"), QWebSocketServer::NonSecureMode, this);
+    listener->setHandshakeTimeout(5000); listener->setMaxPendingConnections(8);
+    connect(listener.get(), &QWebSocketServer::newConnection, this, &Broker::acceptClients);
+    return listener;
+}
+bool Broker::changePort(quint16 port, const std::function<bool(QString&)>& save) {
+    m_error.clear();
+    if (!port) { m_error = QStringLiteral("ポート番号は1～65535で指定してください。"); return false; }
+    if (port == this->port()) return !save || save(m_error);
+    auto next = createListener();
+    if (!next->listen(m_ws->serverAddress(), port)) { m_error = QStringLiteral("ポート%1で待受できません: %2").arg(port).arg(next->errorString()); return false; }
+    if (save && !save(m_error)) return false;
+    // Reserve and save the new listener before touching the live one.
+    auto previous = std::move(m_ws); m_ws = std::move(next);
+    previous->close();
+    for (auto* socket : m_clients.keys()) socket->abort();
+    return true;
 }
 bool Broker::start(const QHostAddress& address, quint16 port, const QString& pipe) {
     // Windows permits multiple named-pipe servers with the same name. Serialize
@@ -32,7 +48,7 @@ bool Broker::start(const QHostAddress& address, quint16 port, const QString& pip
     m_lock->setStaleLockTime(0);
     if (!m_lock->tryLock()) { m_error = "A broker already owns this IPC name (or its lock is inaccessible)"; return false; }
     if (!m_local.listen(pipe)) { m_error = "IPC: " + m_local.errorString(); m_lock.reset(); return false; }
-    if (!m_ws.listen(address, port)) { m_error = "WebSocket: " + m_ws.errorString(); m_local.close(); m_lock.reset(); return false; }
+    if (!m_ws->listen(address, port)) { m_error = "WebSocket: " + m_ws->errorString(); m_local.close(); m_lock.reset(); return false; }
     m_timer.start(1000);
     return true;
 }
@@ -40,7 +56,7 @@ Broker::~Broker() {
     m_timer.stop();
     for (auto* s : m_clients.keys()) { s->disconnect(this); s->abort(); delete s; }
     for (auto* s : m_agents.keys()) { s->disconnect(this); s->abort(); delete s; }
-    m_ws.close(); m_local.close();
+    m_ws->close(); m_local.close();
 }
 void Broker::send(QWebSocket* s, const QJsonObject& o) {
     if (!s || s->state() != QAbstractSocket::ConnectedState) return;
@@ -114,7 +130,7 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
     } else if (type != "heartbeat") s->abort();
 }
 void Broker::acceptClients() {
-    while (auto* s = m_ws.nextPendingConnection()) {
+    while (auto* s = m_ws->nextPendingConnection()) {
         if (m_clients.size() >= 16) { s->close(); s->deleteLater(); continue; }
         s->setMaxAllowedIncomingMessageSize(Remote::MaxMessage);
         s->setMaxAllowedIncomingFrameSize(Remote::MaxMessage);

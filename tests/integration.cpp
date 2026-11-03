@@ -1,6 +1,7 @@
 #include "Broker.h"
 #include "RemoteClient.h"
 #include "StartupSettings.h"
+#include "ServerSettings.h"
 #include <QJsonArray>
 #include <QSignalSpy>
 #include <QFile>
@@ -298,6 +299,63 @@ private slots:
         const auto pipe = pipeName(); Broker first, second;
         QVERIFY(first.start(QHostAddress::LocalHost, 0, pipe));
         QVERIFY(!second.start(QHostAddress::LocalHost, 0, pipe));
+    }
+    void portChangePreservesAgentsAndPersistsStartup() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent agent(pipe, "TVTest", "persistent-target"); QTRY_VERIFY(!agent.id.isEmpty());
+        const auto id = agent.id;
+        Client old(b.port()); QTRY_VERIFY(old.has("ready")); old.claim(id); QTRY_VERIFY(old.has("selection", "claimed"));
+        old.key(id, 1); QTRY_COMPARE(agent.keys.size(), 1);
+        QSettings config(m_temporary.path() + "/port.ini", QSettings::IniFormat);
+        QSettings registration(m_temporary.path() + "/port-startup.ini", QSettings::IniFormat);
+        ServerSettings settings(config, pipe); StartupSettings startup(registration, pipe);
+        QString error; QVERIFY(startup.setEnabled(true, "previous-command", error));
+        QTcpServer freePort; QVERIFY(freePort.listen(QHostAddress::LocalHost, 0));
+        const auto port = freePort.serverPort(); freePort.close();
+        QVERIFY(settings.applyPort(b, port, "127.0.0.1", &startup, "C:/Remote App/server.exe", error));
+        QCOMPARE(b.port(), port); QTRY_COMPARE(old.socket.state(), QAbstractSocket::UnconnectedState);
+        QCOMPARE(agent.id, id); QCOMPARE(agent.socket.state(), QLocalSocket::ConnectedState);
+        QCOMPARE(agent.keys.size(), 1);
+        Client fresh(port); QTRY_VERIFY(fresh.has("ready")); fresh.claim(id); QTRY_VERIFY(fresh.has("selection", "claimed"));
+        fresh.key(id, 1, "red"); QTRY_COMPARE(agent.keys.size(), 2);
+        QSettings saved(m_temporary.path() + "/port.ini", QSettings::IniFormat);
+        QCOMPARE(ServerSettings(saved, pipe).port(), port); QCOMPARE(ServerSettings(saved, pipe + "-other").port(), quint16(18765));
+        QCOMPARE(startup.command(), StartupSettings::makeCommand("C:/Remote App/server.exe", "127.0.0.1", port, pipe));
+    }
+    void occupiedOrInvalidPortLeavesLiveConnectionAndPreferencesUnchanged() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Client client(b.port()); QTRY_VERIFY(client.has("ready")); const auto previous = b.port();
+        QSettings config(m_temporary.path() + "/occupied-port.ini", QSettings::IniFormat);
+        ServerSettings settings(config, pipe); QString error;
+        QVERIFY(settings.applyPort(b, previous, "127.0.0.1", nullptr, {}, error));
+        QTcpServer occupied; QVERIFY(occupied.listen(QHostAddress::LocalHost, 0));
+        QVERIFY(!settings.applyPort(b, occupied.serverPort(), "127.0.0.1", nullptr, {}, error)); QVERIFY(!error.isEmpty());
+        QCOMPARE(b.port(), previous); QCOMPARE(settings.port(), previous);
+        QCOMPARE(client.socket.state(), QAbstractSocket::ConnectedState);
+        QVERIFY(!settings.applyPort(b, 0, "127.0.0.1", nullptr, {}, error));
+        QVERIFY(!settings.applyPort(b, 65536, "127.0.0.1", nullptr, {}, error));
+        QCOMPARE(b.port(), previous);
+    }
+    void portSaveFailureKeepsOldListenerAndRollsBackPreferences() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Client client(b.port()); QTRY_VERIFY(client.has("ready")); const auto previous = b.port();
+        const auto blockerPath = m_temporary.path() + "/port-blocker";
+        QFile blocker(blockerPath); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        QTcpServer freePort; QVERIFY(freePort.listen(QHostAddress::LocalHost, 0)); const auto next = freePort.serverPort(); freePort.close();
+        QSettings broken(blockerPath + "/settings.ini", QSettings::IniFormat);
+        ServerSettings failed(broken, pipe); QString error;
+        QVERIFY(!failed.applyPort(b, next, "127.0.0.1", nullptr, {}, error)); QVERIFY(!error.isEmpty());
+        QCOMPARE(b.port(), previous); QCOMPARE(client.socket.state(), QAbstractSocket::ConnectedState);
+        QSettings config(m_temporary.path() + "/rollback-port.ini", QSettings::IniFormat);
+        ServerSettings settings(config, pipe);
+        QVERIFY(settings.applyPort(b, previous, "127.0.0.1", nullptr, {}, error));
+        broken.setValue(StartupSettings::entryName(pipe), "previous-startup-command");
+        StartupSettings startup(broken, pipe);
+        QVERIFY(!settings.applyPort(b, next, "127.0.0.1", &startup, "C:/Remote/server.exe", error));
+        QCOMPARE(settings.port(), previous); QCOMPARE(b.port(), previous);
+        QCOMPARE(startup.command(), QString("previous-startup-command"));
+        QCOMPARE(client.socket.state(), QAbstractSocket::ConnectedState);
+        QVERIFY(freePort.listen(QHostAddress::LocalHost, next));
     }
     void startupRegistrationPersistsAndPreservesOtherEntries() {
         const auto file = m_temporary.path() + "/startup.ini";

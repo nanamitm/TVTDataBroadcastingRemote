@@ -27,7 +27,7 @@ target_link_libraries(remote_client PUBLIC remote_protocol Qt6::Network Qt6::Web
 
 if(NOT ANDROID)
     add_library(remote_broker src/server/Broker.cpp src/server/Broker.h src/server/ServerControl.cpp src/server/ServerControl.h
-        src/server/StartupSettings.cpp src/server/StartupSettings.h)
+        src/server/StartupSettings.cpp src/server/StartupSettings.h src/server/ServerSettings.cpp src/server/ServerSettings.h)
     target_include_directories(remote_broker PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/server)
     target_link_libraries(remote_broker PUBLIC remote_protocol Qt6::Network Qt6::WebSockets)
     qt_add_executable(tvt-remote-server src/server/main.cpp)
