@@ -13,6 +13,8 @@ ZIPは `TVTestRemoteServer-<バージョン>-windows-x64.zip` です。展開後
 
 Qt 6.11.1とMinGW 13.1のReleaseビルドを使用します。既存の統合テストとウィンドウ表示テストを実行してから、`windeployqt` でDLLとプラグインを収集します。Qtと同じ版の公式ソースからライセンス本文を同梱します。
 
+Qt 6.11以降のWindows配布構成に対応するため、aqtinstallは対応済みの公式ソースのコミットへ固定しています（[上流の対応](https://github.com/miurahr/aqtinstall/pull/1000)）。
+
 さらに、Qt関連のPATHとプラグイン環境変数を除いた環境で、パッケージのGUIサーバーが起動し、`--stop` で正常終了することを確認します。テスト結果は別の `windows-test-results` Artifactに保存します。
 
 ローカルで同じ確認を行う場合：

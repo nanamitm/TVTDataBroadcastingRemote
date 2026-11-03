@@ -29,6 +29,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Set up Python for Qt installer
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
       - name: Install Qt and MinGW
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
         with:
@@ -38,6 +43,8 @@ jobs:
           arch: win64_mingw
           modules: qtwebsockets qtshadertools
           tools: tools_mingw1310,qt.tools.win64_mingw1310
+          # Released aqt 3.3.0 cannot resolve Qt 6.11's split Windows repositories.
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7
           cache: true
 
       - name: Locate build tools
