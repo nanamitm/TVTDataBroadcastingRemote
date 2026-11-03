@@ -1,0 +1,39 @@
+#include "RemoteClient.h"
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickStyle>
+#include <QQuickWindow>
+#include <QImage>
+#include <QTimer>
+#include <QFontDatabase>
+#include <QStandardPaths>
+
+int main(int argc, char** argv) {
+    QGuiApplication app(argc, argv);
+    app.setOrganizationName("nanamitm"); app.setApplicationName("TVTestRemote");
+    QQuickStyle::setStyle("Material");
+    if (qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
+        const auto fontId = QFontDatabase::addApplicationFont(
+            QStandardPaths::writableLocation(QStandardPaths::FontsLocation) + "/YuGothR.ttc");
+        const auto families = QFontDatabase::applicationFontFamilies(fontId);
+        if (!families.isEmpty()) app.setFont(QFont(families.first(), 10));
+    }
+    RemoteClient remote;
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &remote,
+        [&remote](Qt::ApplicationState state) { remote.setActive(state == Qt::ApplicationActive); });
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("remote", &remote);
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
+    engine.loadFromModule("TVTRemote", "Main");
+    const auto args = app.arguments();
+    const auto screenshot = args.indexOf("--screenshot");
+    if (screenshot >= 0 && screenshot + 1 < args.size()) {
+        QTimer::singleShot(800, &app, [&] {
+            auto* window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+            const bool saved = window && window->grabWindow().save(args[screenshot + 1]);
+            app.exit(saved ? 0 : 2);
+        });
+    }
+    return app.exec();
+}

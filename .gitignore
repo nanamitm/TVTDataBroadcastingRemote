@@ -1,0 +1,6 @@
+/build*/
+/work/
+/local/
+*.user
+*.apk
+*.aab
