@@ -24,6 +24,7 @@ CMakeLists.txt.user*
 *.zip
 *.jks
 *.keystore
+android-signing.properties
 *.p12
 *.pfx
 *.pem

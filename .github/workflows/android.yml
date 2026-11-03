@@ -1,0 +1,179 @@
+name: Android APK
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      package:
+        description: APK signing mode
+        type: choice
+        default: signed
+        options:
+          - signed
+          - debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}-${{ inputs.package || 'signed' }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      QT_VERSION: '6.11.1'
+      NDK_VERSION: '27.2.12479018'
+      BUILD_TOOLS_VERSION: '36.0.0'
+      BUILD_MODE: ${{ github.event_name == 'push' && 'signed' || inputs.package }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Prepare signing keystore
+        if: env.BUILD_MODE == 'signed'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SIGNER_SHA256: ${{ vars.ANDROID_SIGNER_SHA256 }}
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_STORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD ANDROID_SIGNER_SHA256; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing Android signing configuration: $name"
+              exit 1
+            fi
+          done
+          umask 077
+          mkdir -p "$RUNNER_TEMP/tvtremote-signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tvtremote-signing/keystore.jks"
+          test -s "$RUNNER_TEMP/tvtremote-signing/keystore.jks"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - name: Install Ninja and host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: >-
+            ndk;27.2.12479018
+            platforms;android-36
+            build-tools;36.0.0
+
+      - name: Install Qt for Android and desktop host tools
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: all_os
+          target: android
+          arch: android_arm64_v8a
+          modules: qtwebsockets qtshadertools
+          extra: --autodesktop
+          cache: true
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          build_type=Debug
+          sign_apk=OFF
+          if [[ "$BUILD_MODE" == signed ]]; then
+            build_type=Release
+            sign_apk=ON
+          fi
+          cmake -S . -B build/android-arm64 -G Ninja \
+            "-DCMAKE_BUILD_TYPE=$build_type" \
+            "-DCMAKE_TOOLCHAIN_FILE=$QT_ROOT_DIR/lib/cmake/Qt6/qt.toolchain.cmake" \
+            "-DQT_HOST_PATH=$QT_HOST_PATH" \
+            "-DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" \
+            "-DANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" \
+            "-DCMAKE_ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" \
+            -DANDROID_ABI=arm64-v8a \
+            -DREMOTE_BUILD_TESTS=OFF \
+            "-DQT_ANDROID_SIGN_APK=$sign_apk"
+
+      - name: Build APK
+        env:
+          QT_ANDROID_KEYSTORE_PATH: ${{ env.BUILD_MODE == 'signed' && format('{0}/tvtremote-signing/keystore.jks', runner.temp) || '' }}
+          QT_ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          QT_ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          QT_ANDROID_KEYSTORE_KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: cmake --build build/android-arm64 --target apk --parallel 2
+
+      - name: Sign and verify final APK
+        id: package
+        env:
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SIGNER_SHA256: ${{ vars.ANDROID_SIGNER_SHA256 }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import pathlib,re; print(re.search(r"project\(TVTDataBroadcastingRemote VERSION ([0-9.]+)", pathlib.Path("CMakeLists.txt").read_text()).group(1))')
+          mkdir -p dist
+          apksigner="$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+          variant=debug
+          suffix=-debug
+          if [[ "$BUILD_MODE" == signed ]]; then variant=release; suffix=; fi
+          mapfile -t apks < <(find "build/android-arm64/android-build/build/outputs/apk/$variant" -maxdepth 1 -name '*.apk' -type f | sort)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one $variant APK, found ${#apks[@]}"
+            exit 1
+          fi
+          apk="dist/TVTestRemote-$version-android-arm64$suffix.apk"
+          if [[ "$BUILD_MODE" == signed ]]; then
+            "$apksigner" sign \
+              --ks "$RUNNER_TEMP/tvtremote-signing/keystore.jks" \
+              --ks-pass env:ANDROID_STORE_PASSWORD \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --key-pass env:ANDROID_KEY_PASSWORD \
+              --out "$apk" "${apks[0]}"
+          else
+            cp "${apks[0]}" "$apk"
+          fi
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$apk.signer.txt"
+          if [[ "$BUILD_MODE" == signed ]]; then
+            actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$apk.signer.txt")
+            if [[ "${actual,,}" != "${ANDROID_SIGNER_SHA256,,}" ]]; then
+              echo '::error::APK signing certificate does not match ANDROID_SIGNER_SHA256'
+              exit 1
+            fi
+          fi
+          (cd dist && sha256sum "$(basename "$apk")" > "$(basename "$apk").sha256")
+          printf 'apk=%s\n' "$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-arm64-${{ env.BUILD_MODE }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach signed APK to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+
+      - name: Remove temporary signing keystore
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/tvtremote-signing/keystore.jks"

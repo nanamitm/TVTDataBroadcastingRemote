@@ -27,6 +27,8 @@ QtのAndroid ARM64キット、同じ版のデスクトップQt、Android SDK/NDK
 
 `build/android-arm64/android-build/build/outputs/apk/debug/android-build-debug.apk` に開発用APKを生成します。C++はReleaseビルドで、Android標準のデバッグ署名を使用します。
 
+GitHub Actionsによる署名済みAPKの作成とSecrets設定は [Android署名ビルド](android-release.md) を参照してください。
+
 ## アイコンの再生成
 
 元データは `assets/icons/*.svg` です。デスクトップQtのGui/Svgで生成済みPNG・ICOを更新できます。通常のビルドにSvgは不要です。

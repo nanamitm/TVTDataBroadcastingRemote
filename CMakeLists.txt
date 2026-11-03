@@ -97,7 +97,9 @@ if(REMOTE_BUILD_APP)
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
             QT_ANDROID_VERSION_CODE 8
             QT_ANDROID_MIN_SDK_VERSION 28
-            QT_ANDROID_TARGET_SDK_VERSION 35)
+            QT_ANDROID_TARGET_SDK_VERSION 35
+            QT_ANDROID_COMPILE_SDK_VERSION 36
+            QT_ANDROID_SDK_BUILD_TOOLS_REVISION 36.0.0)
         qt_add_android_permission(tvt-remote NAME android.permission.INTERNET)
     endif()
 endif()
