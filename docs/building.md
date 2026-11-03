@@ -4,7 +4,7 @@
 
 ## Windowsビルド
 
-Qt 6.8以上のCore / Network / WebSockets / Quick / QuickControls2 / Test、CMake 3.24以上、C++20コンパイラが必要です。検証環境はQt 6.11.1、MinGW 13.1です。
+Qt 6.8以上のCore / Network / WebSockets / Widgets / Quick / QuickControls2 / Test、CMake 3.24以上、C++20コンパイラが必要です。WidgetsはWindowsサーバーの通知領域アイコンと状態画面に使用します。検証環境はQt 6.11.1、MinGW 13.1です。
 
 ```powershell
 ./scripts/Build-Windows.ps1

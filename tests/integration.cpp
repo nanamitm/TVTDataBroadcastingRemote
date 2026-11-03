@@ -296,6 +296,34 @@ private slots:
         QVERIFY(first.start(QHostAddress::LocalHost, 0, pipe));
         QVERIFY(!second.start(QHostAddress::LocalHost, 0, pipe));
     }
+    void serverShutdownCommandAndRestart() {
+        const auto pipe = pipeName();
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            QProcess server;
+            server.start(QStringLiteral(REMOTE_SERVER_PATH), {"--no-tray", "--port", "0", "--pipe", pipe});
+            QVERIFY(server.waitForStarted(5000));
+            QByteArray output;
+            QTRY_VERIFY_WITH_TIMEOUT((output += server.readAllStandardOutput()).contains("WS "), 5000);
+            QProcess stop;
+            if (attempt == 0) {
+                stop.start(QStringLiteral(REMOTE_SERVER_PATH), {"--stop", "--pipe", pipe + "-other"});
+                QVERIFY(stop.waitForFinished(5000)); QCOMPARE(stop.exitCode(), 1);
+                QVERIFY(stop.readAllStandardError().contains("Cannot connect"));
+                QCOMPARE(server.state(), QProcess::Running);
+                QLocalSocket malformed;
+                malformed.connectToServer(pipe + ".control"); QVERIFY(malformed.waitForConnected(1000));
+                malformed.write("invalid\n"); malformed.flush();
+                QTRY_COMPARE(malformed.state(), QLocalSocket::UnconnectedState);
+                QCOMPARE(server.state(), QProcess::Running);
+            }
+            stop.start(QStringLiteral(REMOTE_SERVER_PATH), {"--stop", "--pipe", pipe});
+            QVERIFY(stop.waitForFinished(5000)); QCOMPARE(stop.exitCode(), 0);
+            QVERIFY(stop.readAllStandardOutput().contains("shutdown requested"));
+            QVERIFY(server.waitForFinished(5000)); QCOMPARE(server.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(server.exitCode(), 0);
+        }
+        Broker replacement; QVERIFY(replacement.start(QHostAddress::LocalHost, 0, pipe));
+    }
     void consoleHelpAndErrors() {
         QProcess process;
         process.start(QStringLiteral(REMOTE_SERVER_PATH), {"--help"});

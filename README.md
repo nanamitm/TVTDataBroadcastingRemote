@@ -18,6 +18,8 @@ LAN内でURLを指定して接続します。接続の認証、証明書、ペ�
 2. Windowsで `tvt-remote-server.exe` を起動します（既定ポート: 18765）。
 3. Androidアプリの歯車から `ws://PCのLAN内IP:18765` を指定し、操作するTVTestを選びます。
 
+サーバーの終了は、Windowsの通知領域にあるサーバーアイコンを右クリックして「終了」、または `tvt-remote-server.exe --stop` で行います。
+
 設定例、自動接続、複数TVTestの識別は [導入と接続](docs/getting-started.md) を参照してください。
 
 ## ドキュメント
