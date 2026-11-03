@@ -1,5 +1,6 @@
 #include "Broker.h"
 #include "ServerControl.h"
+#include "StartupSettings.h"
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QTextStream>
@@ -7,14 +8,17 @@
 #ifdef Q_OS_WIN
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSystemTrayIcon>
 #include <QVBoxLayout>
 
-static int runWithTray(QApplication& app, const QString& endpoint, const QString& pipe, bool showWindow) {
+static int runWithTray(QApplication& app, const QString& address, quint16 port, const QString& pipe, bool showWindow) {
+    const auto endpoint = QStringLiteral("ws://%1:%2").arg(address).arg(port);
     app.setQuitOnLastWindowClosed(false);
     const QIcon icon(":/icons/server.png");
     app.setWindowIcon(icon);
@@ -22,6 +26,30 @@ static int runWithTray(QApplication& app, const QString& endpoint, const QString
     status.setWindowTitle(QStringLiteral("TVTest Remote サーバー"));
     auto* layout = new QVBoxLayout(&status);
     layout->addWidget(new QLabel(QStringLiteral("サーバーは稼働中です\n待受: %1\nIPC: %2").arg(endpoint, pipe), &status));
+    QSettings registry(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"), QSettings::NativeFormat);
+    StartupSettings startup(registry, pipe);
+    const auto startupCommand = StartupSettings::makeCommand(QCoreApplication::applicationFilePath(), address, port, pipe);
+    auto* autoStart = new QCheckBox(QStringLiteral("Windowsサインイン時に自動起動"), &status);
+    autoStart->setChecked(startup.enabled());
+    layout->addWidget(autoStart);
+    auto* startupInfo = new QLabel(QStringLiteral("現在の待受IP・ポート・IPC名を保存し、通知領域へ常駐します。"), &status);
+    startupInfo->setWordWrap(true);
+    startupInfo->setMinimumWidth(320);
+    layout->addWidget(startupInfo);
+    // Keep an already-enabled registration valid when a new build is launched.
+    if (startup.enabled() && startup.command() != startupCommand) {
+        QString error;
+        if (!startup.setEnabled(true, startupCommand, error)) startupInfo->setText(error);
+    }
+    QObject::connect(autoStart, &QCheckBox::toggled, &status, [&](bool enabled) {
+        QString error;
+        if (startup.setEnabled(enabled, startupCommand, error))
+            startupInfo->setText(enabled ? QStringLiteral("サインイン時の自動起動を有効にしました。") : QStringLiteral("サインイン時の自動起動を無効にしました。"));
+        else {
+            const QSignalBlocker blocker(autoStart);
+            autoStart->setChecked(startup.enabled()); startupInfo->setText(error);
+        }
+    });
     auto* stop = new QPushButton(QStringLiteral("サーバーを終了"), &status);
     layout->addWidget(stop);
     QObject::connect(stop, &QPushButton::clicked, &app, &QCoreApplication::quit);
@@ -93,7 +121,7 @@ int main(int argc, char** argv) {
         << " | IPC " << parser.value("pipe") << Qt::endl;
 #ifdef Q_OS_WIN
     if (useTray) return runWithTray(static_cast<QApplication&>(app),
-        QStringLiteral("ws://%1:%2").arg(address.toString()).arg(broker.port()), parser.value("pipe"), parser.isSet("show-window"));
+        address.toString(), broker.port(), parser.value("pipe"), parser.isSet("show-window"));
 #endif
     return app.exec();
 }

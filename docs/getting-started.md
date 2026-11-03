@@ -22,6 +22,14 @@ Windowsでは通知領域にサーバーのアイコンが表示されます。�
 
 PowerShellのスクリプトで終了完了を待ってから次の処理へ進む場合は、`Start-Process ./tvt-remote-server.exe -ArgumentList '--stop' -WindowStyle Hidden -Wait` を使用します。
 
+### Windowsサインイン時の自動起動
+
+通知領域のアイコンから「状態を表示」を開き、「Windowsサインイン時に自動起動」にチェックを入れます。現在のユーザーだけを対象に、現在の実行ファイルと待受IP・ポート・IPC名を登録します。管理者権限は不要で、初期値はオフです。自動起動時は状態画面を開かず、通知領域へ常駐します。チェックを外すと登録を解除します。
+
+サーバーを「終了」しても自動起動の登録は保持します。自動起動を止める場合はチェックを外してください。既に登録済みで新版を起動した場合は、登録先を起動した実行ファイルの場所と現在の待受設定へ更新します。フォルダを移動した場合も、新しい場所から一度起動してください。
+
+登録にはユーザーの `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` を使用します。IPC名ごとに別の登録を管理します。登録コマンドがWindowsの260文字制限を超える場合は画面にエラーを表示します。[WindowsのRunキー仕様](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys)
+
 既定は `0.0.0.0:18765`、IPC名は `TVTDataBroadcastingRemote-v1` です。特定のIP・ポートを指定することもできます。
 
 ```powershell

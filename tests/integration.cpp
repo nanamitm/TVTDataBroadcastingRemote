@@ -1,11 +1,13 @@
 #include "Broker.h"
 #include "RemoteClient.h"
+#include "StartupSettings.h"
 #include <QJsonArray>
 #include <QSignalSpy>
 #include <QFile>
 #include <QDateTime>
 #include <QProcess>
 #include <QSettings>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTcpServer>
 #include <QTest>
@@ -14,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include "Win32RemoteBridge.h"
 #include "TargetIdentity.h"
+#include <shellapi.h>
 #endif
 
 namespace {
@@ -296,6 +299,33 @@ private slots:
         QVERIFY(first.start(QHostAddress::LocalHost, 0, pipe));
         QVERIFY(!second.start(QHostAddress::LocalHost, 0, pipe));
     }
+    void startupRegistrationPersistsAndPreservesOtherEntries() {
+        const auto file = m_temporary.path() + "/startup.ini";
+        QSettings settings(file, QSettings::IniFormat);
+        settings.setValue("OtherApplication", "unchanged");
+        StartupSettings main(settings, Remote::PipeName), other(settings, "another-profile");
+        QVERIFY(!main.enabled()); QVERIFY(!other.enabled());
+        QString error;
+        const auto command = StartupSettings::makeCommand("C:/Remote App/server.exe", "192.0.2.10", 18765, Remote::PipeName);
+        QVERIFY(main.setEnabled(true, command, error)); QVERIFY(error.isEmpty());
+        QSettings persisted(file, QSettings::IniFormat);
+        StartupSettings reload(persisted, Remote::PipeName); QVERIFY(reload.enabled()); QCOMPARE(reload.command(), command);
+        QVERIFY(other.setEnabled(true, "other-command", error));
+        QVERIFY(main.setEnabled(true, "new-location-command", error)); QCOMPARE(main.command(), QString("new-location-command"));
+        QVERIFY(!main.setEnabled(true, QString(261, 'x'), error)); QVERIFY(!error.isEmpty());
+        QCOMPARE(main.command(), QString("new-location-command"));
+        QVERIFY(main.setEnabled(false, {}, error)); QVERIFY(!main.enabled());
+        QVERIFY(other.enabled()); QCOMPARE(settings.value("OtherApplication").toString(), QString("unchanged"));
+    }
+    void startupRegistrationReportsWriteFailure() {
+        const auto file = m_temporary.path() + "/startup-blocker";
+        QFile blocker(file); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        QSettings settings(file + "/settings.ini", QSettings::IniFormat);
+        StartupSettings startup(settings, Remote::PipeName);
+        QString error;
+        QVERIFY(!startup.setEnabled(true, "server-command", error)); QVERIFY(!error.isEmpty());
+        QVERIFY(!startup.enabled());
+    }
     void serverShutdownCommandAndRestart() {
         const auto pipe = pipeName();
         for (int attempt = 0; attempt < 2; ++attempt) {
@@ -335,6 +365,32 @@ private slots:
         QVERIFY(!process.readAllStandardError().isEmpty());
     }
 #ifdef Q_OS_WIN
+    void windowsStartupCommandRoundTripsAndRegistryPersists() {
+        const QString executable = "C:/Remote App/server.exe";
+        const QString pipe = "living room \\\"quoted\\\"\\";
+        const auto command = StartupSettings::makeCommand(executable, "192.0.2.10", 18765, pipe);
+        int count = 0;
+        auto** args = CommandLineToArgvW(command.toStdWString().c_str(), &count);
+        QVERIFY(args != nullptr);
+        const auto cleanupArgs = qScopeGuard([&] { LocalFree(args); });
+        QCOMPARE(count, 7);
+        QCOMPARE(QString::fromWCharArray(args[0]), QString("C:\\Remote App\\server.exe"));
+        QCOMPARE(QString::fromWCharArray(args[1]), QString("--address"));
+        QCOMPARE(QString::fromWCharArray(args[2]), QString("192.0.2.10"));
+        QCOMPARE(QString::fromWCharArray(args[3]), QString("--port"));
+        QCOMPARE(QString::fromWCharArray(args[4]), QString("18765"));
+        QCOMPARE(QString::fromWCharArray(args[5]), QString("--pipe"));
+        QCOMPARE(QString::fromWCharArray(args[6]), pipe);
+        // Isolated native registry key: never enable actual Windows startup in tests.
+        const auto key = "HKEY_CURRENT_USER\\Software\\nanamitm\\TVTestRemoteTests\\" + pipeName();
+        QSettings registry(key, QSettings::NativeFormat);
+        const auto cleanupRegistry = qScopeGuard([&] { registry.clear(); registry.sync(); });
+        StartupSettings startup(registry, Remote::PipeName); QString error;
+        QVERIFY(startup.setEnabled(true, command, error));
+        QSettings reloaded(key, QSettings::NativeFormat);
+        StartupSettings restored(reloaded, Remote::PipeName); QCOMPARE(restored.command(), command);
+        QVERIFY(startup.setEnabled(false, {}, error)); QVERIFY(!registry.contains(StartupSettings::entryName(Remote::PipeName)));
+    }
     void persistentPluginTokenIsConfigurable() {
         const auto path = (m_temporary.path() + "/identity.ini").toStdWString();
         std::wstring first, second;
