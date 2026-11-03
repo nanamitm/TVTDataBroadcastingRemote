@@ -31,7 +31,7 @@ The target order is unspecified. Use IDs for identity and render labels as text.
 
 Each target has one owner, identified by its WebSocket connection. Claim statuses: `claimed`, `busy`, `target_gone`. A failed claim preserves the previous selection and returns its ID (or an empty string). A successful switch releases the previous target.
 
-`release` yields `selection` status `released`. Agent disconnect yields `target_gone` and clears the selection. Client disconnect releases its claim. Reconnection never restores a claim automatically. This is routing arbitration, not authentication.
+`release` yields `selection` status `released`. Agent disconnect yields `target_gone` and clears the selection. Client disconnect releases its claim. The server never carries ownership across connections. App 0.3.0+ can request a fresh claim after reconnect, but only for the previously selected exact target ID at the same URL, and only if it is available. It never substitutes another target by label or PID, takes an occupied target, or replays a key. Explicit release forgets the remembered target. This is routing arbitration, not authentication.
 
 ## Keys
 
@@ -74,5 +74,5 @@ Only the recipient IPC connection may acknowledge a request. `dispatched`/`unava
 - 64 KiB maximum queued output per socket; the native SDK has 16-entry queues.
 - IPC lines are buffered across partial reads. Malformed or oversized input disconnects its sender.
 - SDK disconnects clear queues and change an internal generation. Old completions are ignored. The UI polls up to 4 commands per 50 ms without network waits.
-- Backgrounding disconnects the app. Selections and keys are not restored after reconnect.
+- Backgrounding disconnects the app. With auto-connect enabled, startup/resume reconnects to the saved URL and can restore an available exact target ID via a new claim. Manual disconnect is respected for the current app run. Keys are never restored or replayed.
 - Input already handed to the plugin cannot always be cancelled by release/disconnect.

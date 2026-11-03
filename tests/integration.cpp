@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTcpServer>
 #include <QTest>
 #include <QUuid>
 #ifdef Q_OS_WIN
@@ -134,7 +135,7 @@ private slots:
         c.key(a.id, 1); QTRY_COMPARE(a.keys.size(), 1); QTRY_VERIFY_WITH_TIMEOUT(c.has("result", "timeout"), 4500);
         QTest::qWait(50); QCOMPARE(a.keys.size(), 1);
     }
-    void applicationDoesNotRestoreSelection() {
+    void applicationRestoresSelectionWithoutReplayingKeys() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         Agent a(pipe, "TVTest"); QTRY_VERIFY(!a.id.isEmpty());
         RemoteClient c; QSignalSpy results(&c, &RemoteClient::commandResult);
@@ -143,9 +144,79 @@ private slots:
         c.claim(a.id); QTRY_COMPARE(c.selected(), a.id); c.press("enter"); QTRY_COMPARE(results.size(), 1);
         QCOMPARE(a.keys.size(), 1); c.setActive(false); QVERIFY(c.selected().isEmpty()); QVERIFY(!c.connected());
         c.press("enter");
-        c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
-        QTRY_VERIFY(c.connected()); QVERIFY(c.selected().isEmpty()); c.press("enter");
+        c.setActive(true);
+        QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.selected(), a.id);
         QTest::qWait(50); QCOMPARE(a.keys.size(), 1);
+        c.setActive(true); QVERIFY(c.connected());
+        c.press("back"); QTRY_COMPARE(results.size(), 2); QCOMPARE(a.keys.size(), 2);
+    }
+    void coldStartAndAutoConnectionPreference() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "Remembered TVTest"); QTRY_VERIFY(!a.id.isEmpty());
+        const auto url = QString("ws://127.0.0.1:%1").arg(b.port());
+        {
+            RemoteClient first; first.connectTo(url); QTRY_VERIFY(first.connected());
+            first.claim(a.id); QTRY_COMPARE(first.selected(), a.id); first.setActive(false);
+        }
+        RemoteClient restored; QVERIFY(restored.hasSavedConnection()); restored.start();
+        QTRY_VERIFY(restored.connected()); QTRY_COMPARE(restored.selected(), a.id);
+        restored.start(); QVERIFY(restored.connected()); QCOMPARE(a.keys.size(), 0);
+        restored.setAutoConnect(false); restored.setActive(false); restored.setActive(true);
+        QTest::qWait(150); QVERIFY(!restored.connected()); QCOMPARE(restored.status(), QStringLiteral("未接続"));
+        RemoteClient disabled; QVERIFY(!disabled.autoConnect()); disabled.start();
+        QTest::qWait(150); QVERIFY(!disabled.connected());
+    }
+    void startupRetriesUntilServerBecomesAvailable() {
+        QTcpServer reserve; QVERIFY(reserve.listen(QHostAddress::LocalHost, 0));
+        const auto port = reserve.serverPort(); reserve.close();
+        QSettings().setValue("url", QString("ws://127.0.0.1:%1").arg(port));
+        RemoteClient c; c.start(); QTest::qWait(100); QVERIFY(!c.connected());
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, port, pipe));
+        Agent a(pipe, "Late TVTest");
+        QTRY_VERIFY_WITH_TIMEOUT(c.connected(), 5000); QTRY_COMPARE(c.targets().size(), 1);
+        QVERIFY(c.selected().isEmpty()); QCOMPARE(a.keys.size(), 0);
+    }
+    void manualDisconnectAndReleaseAreRespected() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "TVTest"); QTRY_VERIFY(!a.id.isEmpty());
+        const auto url = QString("ws://127.0.0.1:%1").arg(b.port());
+        RemoteClient c; c.connectTo(url); QTRY_VERIFY(c.connected()); c.claim(a.id); QTRY_COMPARE(c.selected(), a.id);
+        c.disconnectFromServer(); c.setActive(false); c.setActive(true);
+        QTest::qWait(150); QVERIFY(!c.connected());
+        c.connectTo(url); QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.selected(), a.id);
+        c.release(); QVERIFY(c.selected().isEmpty()); c.setActive(false); c.setActive(true);
+        QTRY_VERIFY(c.connected()); QTest::qWait(150); QVERIFY(c.selected().isEmpty()); QCOMPARE(a.keys.size(), 0);
+    }
+    void releaseWhileSwitchingDoesNotRememberTheNewTarget() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "A"), other(pipe, "B"); QTRY_VERIFY(!a.id.isEmpty() && !other.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port())); QTRY_VERIFY(c.connected());
+        c.claim(a.id); QTRY_COMPARE(c.selected(), a.id);
+        c.claim(other.id); c.release();
+        QTRY_VERIFY(c.status().contains(QStringLiteral("解放しました"))); QVERIFY(!QSettings().contains("targetId"));
+        c.setActive(false); c.setActive(true); QTRY_VERIFY(c.connected()); QTest::qWait(100);
+        QVERIFY(c.selected().isEmpty()); QCOMPARE(a.keys.size(), 0); QCOMPARE(other.keys.size(), 0);
+    }
+    void previousTargetOwnedByAnotherRemoteIsNotTaken() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "TVTest"); QTRY_VERIFY(!a.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port())); QTRY_VERIFY(c.connected());
+        c.claim(a.id); QTRY_COMPARE(c.selected(), a.id); c.setActive(false);
+        Client owner(b.port()); QTRY_VERIFY(owner.has("ready")); owner.claim(a.id); QTRY_VERIFY(owner.has("selection", "claimed"));
+        c.setActive(true); QTRY_VERIFY(c.connected());
+        QTRY_VERIFY(c.status().contains(QStringLiteral("別のリモコン"))); QVERIFY(c.selected().isEmpty());
+        c.press("enter"); QCOMPARE(a.keys.size(), 0);
+        owner.send(Remote::message("release")); QTRY_VERIFY(owner.has("selection", "released"));
+        QTest::qWait(100); QVERIFY(c.selected().isEmpty());
+    }
+    void resumeDoesNotChooseAReplacementInstance() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent original(pipe, "Same name"); QTRY_VERIFY(!original.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port())); QTRY_VERIFY(c.connected());
+        c.claim(original.id); QTRY_COMPARE(c.selected(), original.id); c.setActive(false); original.socket.abort();
+        Agent replacement(pipe, "Same name"); QTRY_VERIFY(!replacement.id.isEmpty()); QVERIFY(replacement.id != original.id);
+        c.setActive(true); QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.targets().size(), 1);
+        QTest::qWait(100); QVERIFY(c.selected().isEmpty()); c.press("enter"); QCOMPARE(replacement.keys.size(), 0);
     }
     void acknowledgementsCannotCrossTargets() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));

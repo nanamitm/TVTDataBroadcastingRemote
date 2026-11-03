@@ -200,6 +200,12 @@ ApplicationWindow {
                 spacing: 12
                 Label { text: "サーバーURL" }
                 TextField { id: url; text: remote.savedUrl; placeholderText: "ws://192.168.1.10:18765"; Layout.fillWidth: true; inputMethodHints: Qt.ImhUrlCharactersOnly }
+                Switch {
+                    text: "起動・復帰時に自動接続"
+                    checked: remote.autoConnect
+                    Layout.fillWidth: true
+                    onToggled: remote.autoConnect = checked
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     Button {
@@ -294,5 +300,8 @@ ApplicationWindow {
             }
         }
     }
-    Component.onCompleted: settings.open()
+    Component.onCompleted: {
+        remote.start()
+        if (!remote.hasSavedConnection) settings.open()
+    }
 }

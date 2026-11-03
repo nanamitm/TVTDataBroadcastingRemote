@@ -22,8 +22,12 @@ int main(int argc, char** argv) {
         if (!families.isEmpty()) app.setFont(QFont(families.first(), 10));
     }
     RemoteClient remote;
+    remote.setActive(app.applicationState() != Qt::ApplicationHidden && app.applicationState() != Qt::ApplicationSuspended);
     QObject::connect(&app, &QGuiApplication::applicationStateChanged, &remote,
-        [&remote](Qt::ApplicationState state) { remote.setActive(state == Qt::ApplicationActive); });
+        [&remote](Qt::ApplicationState state) {
+            if (state == Qt::ApplicationActive) remote.setActive(true);
+            else if (state == Qt::ApplicationHidden || state == Qt::ApplicationSuspended) remote.setActive(false);
+        });
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("remote", &remote);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
