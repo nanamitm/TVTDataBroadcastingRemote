@@ -16,7 +16,9 @@ int main(int argc, char** argv) {
         {"pipe", "Local IPC name", "name", Remote::PipeName},
         {"token-file", "Token file (created if missing)", "file"},
         {"cert", "TLS certificate PEM", "file"}, {"key", "TLS private key PEM", "file"}});
-    parser.process(app);
+    if (!parser.parse(app.arguments())) { QTextStream(stderr) << parser.errorText() << '\n'; return 1; }
+    if (parser.isSet("help")) { QTextStream(stdout) << parser.helpText(); return 0; }
+    if (parser.isSet("version")) { QTextStream(stdout) << app.applicationVersion() << '\n'; return 0; }
     auto fail = [](const QString& error) { QTextStream(stderr) << error << '\n'; return 1; };
     const auto tokenPath = parser.value("token-file");
     if (tokenPath.isEmpty()) return fail("--token-file is required; token contents are never logged");

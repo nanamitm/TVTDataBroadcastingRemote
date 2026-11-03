@@ -11,7 +11,8 @@ int main(int argc, char** argv) {
     p.addOptions({{"name", "Instance label", "name", "Demo TVTest"},
         {"channel", "Channel label", "channel", "Demo channel"},
         {"pipe", "Local IPC name", "name", Remote::PipeName}});
-    p.process(app);
+    if (!p.parse(app.arguments())) { QTextStream(stderr) << p.errorText() << '\n'; return 1; }
+    if (p.isSet("help")) { QTextStream(stdout) << p.helpText(); return 0; }
     QLocalSocket socket; QTimer retry, heartbeat; QByteArray buffer;
     retry.setInterval(2000); heartbeat.setInterval(5000);
     auto send = [&](const QJsonObject& o) { if (socket.state() == QLocalSocket::ConnectedState) socket.write(Remote::encode(o) + '\n'); };

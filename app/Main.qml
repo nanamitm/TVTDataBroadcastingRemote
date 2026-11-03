@@ -127,7 +127,12 @@ ApplicationWindow {
         height: Math.min(window.height - 32, 560)
         title: "中継サーバーへ接続"
         modal: true
-        standardButtons: Dialog.Close
+        header: Label { text: settings.title; color: "#edf4f8"; font.pixelSize: 20; padding: 18 }
+        footer: DialogButtonBox {
+            background: Rectangle { color: "#1d2936"; radius: 16 }
+            Button { text: "閉じる"; flat: true; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            onRejected: settings.close()
+        }
         background: Rectangle { color: "#1d2936"; radius: 16 }
         Overlay.modal: Rectangle { color: "#b3000000" }
         ScrollView {

@@ -175,6 +175,15 @@ private slots:
         QVERIFY(first.start(QHostAddress::LocalHost, 0, pipe));
         QVERIFY(!second.start(QHostAddress::LocalHost, 0, pipe));
     }
+    void consoleHelpAndErrors() {
+        QProcess process;
+        process.start(QStringLiteral(REMOTE_SERVER_PATH), {"--help"});
+        QVERIFY(process.waitForFinished(5000)); QCOMPARE(process.exitCode(), 0);
+        QVERIFY(process.readAllStandardOutput().contains("--token-file"));
+        process.start(QStringLiteral(REMOTE_SERVER_PATH), {"--unknown-option"});
+        QVERIFY(process.waitForFinished(5000)); QCOMPARE(process.exitCode(), 1);
+        QVERIFY(!process.readAllStandardError().isEmpty());
+    }
     void tlsPinning() {
         if (m_certificate.isNull()) QSKIP("OpenSSL executable required to generate ephemeral TLS test certificate");
         QVERIFY(QSslSocket::supportsSsl());
