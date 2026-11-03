@@ -124,7 +124,7 @@ ApplicationWindow {
         id: settings
         anchors.centerIn: parent
         width: Math.min(window.width - 24, 430)
-        height: Math.min(window.height - 32, 350)
+        height: Math.min(window.height - 32, implicitHeight)
         title: "中継サーバーへ接続"
         modal: true
         header: Label { text: settings.title; color: "#edf4f8"; font.pixelSize: 20; padding: 18 }
@@ -135,10 +135,11 @@ ApplicationWindow {
         }
         background: Rectangle { color: "#1d2936"; radius: 16 }
         Overlay.modal: Rectangle { color: "#b3000000" }
-        ScrollView {
-            anchors.fill: parent
+        contentItem: ScrollView {
+            implicitHeight: connectionForm.implicitHeight
             contentWidth: availableWidth
             ColumnLayout {
+                id: connectionForm
                 width: parent.width
                 spacing: 12
                 Label { text: "サーバーURL" }
