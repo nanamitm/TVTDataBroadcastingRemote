@@ -11,7 +11,10 @@ foreach ($name in 'PATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QT_Q
 }
 $stdout = [IO.Path]::GetTempFileName()
 $stderr = [IO.Path]::GetTempFileName()
+$stopStdout = [IO.Path]::GetTempFileName()
+$stopStderr = [IO.Path]::GetTempFileName()
 $server = $null
+$stop = $null
 function Read-PackageLog([string]$Path) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     $reader = [IO.StreamReader]::new($stream)
@@ -35,16 +38,25 @@ try {
         Start-Sleep -Milliseconds 200
     }
     if (-not $ready) { throw "Packaged server did not start: $(Read-PackageLog $stderr)" }
-    $stop = Start-Process -FilePath $executable -ArgumentList '--stop', '--pipe', $pipe -WorkingDirectory $package -WindowStyle Hidden -Wait -PassThru
-    if ($stop.ExitCode -ne 0) { throw 'Packaged server shutdown command failed' }
+    $stop = Start-Process -FilePath $executable -ArgumentList '--stop', '--pipe', $pipe -WorkingDirectory $package -WindowStyle Hidden `
+        -RedirectStandardOutput $stopStdout -RedirectStandardError $stopStderr -PassThru
+    $null = $stop.Handle
+    if (-not $stop.WaitForExit(10000)) { throw 'Packaged server shutdown command timed out' }
+    if ($stop.ExitCode -ne 0) {
+        throw "Packaged server shutdown command failed (exit $($stop.ExitCode)): $(Read-PackageLog $stopStderr) $(Read-PackageLog $stopStdout)"
+    }
     if (-not $server.WaitForExit(5000)) { throw 'Packaged server did not exit' }
     if ($server.ExitCode -ne 0) { throw "Packaged server exited with code $($server.ExitCode)" }
     Write-Output 'Windows server package started with an isolated PATH and shut down normally.'
 } finally {
+    if ($stop) {
+        if (-not $stop.HasExited) { $stop.Kill(); $stop.WaitForExit() }
+        $stop.Dispose()
+    }
     if ($server) {
         if (-not $server.HasExited) { $server.Kill(); $server.WaitForExit() }
         $server.Dispose()
     }
     foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
-    Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stdout, $stderr, $stopStdout, $stopStderr -Force -ErrorAction SilentlyContinue
 }
