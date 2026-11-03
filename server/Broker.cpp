@@ -29,7 +29,7 @@ Broker::Broker(const QByteArray& token, bool tls, QObject* parent)
     m_local.setMaxPendingConnections(16);
 }
 bool Broker::start(const QHostAddress& address, quint16 port, const QString& pipe, const QSslConfiguration& ssl) {
-    if (m_token.size() < 32) { m_error = "Token must contain at least 32 bytes"; return false; }
+    if (!Remote::validToken(m_token)) { m_error = "Token must be 3 ASCII digits or 32-4096 bytes"; return false; }
     if (!m_tls && !address.isLoopback()) { m_error = "LAN connections require TLS (--cert and --key)"; return false; }
     // Windows permits multiple named-pipe servers with the same name. Serialize
     // brokers explicitly so TVTest instances never attach to different brokers.
@@ -153,8 +153,17 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
     if (timestamp - c.window >= 1000) { c.window = timestamp; c.count = 0; }
     if (++c.count > 30) { s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Rate limit"); return; }
     if (!c.authenticated) {
+        // A three-digit code has a small search space. Count failures across
+        // connections and retain the lock until an explicit broker restart.
+        // Existing authenticated connections and IPC agents remain available.
+        if (m_token.size() == 3 && m_failedAuthentications >= 5) {
+            s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Authentication locked; restart server"); return;
+        }
         if (type != "auth" || !equalToken(o["token"].toString().toUtf8(), m_token)) {
-            s->close(QWebSocketProtocol::CloseCodePolicyViolated, "Authentication failed"); return;
+            ++m_failedAuthentications;
+            s->close(QWebSocketProtocol::CloseCodePolicyViolated,
+                m_token.size() == 3 && m_failedAuthentications >= 5
+                    ? "Authentication locked; restart server" : "Authentication failed"); return;
         }
         c.authenticated = true; c.last = timestamp;
         auto authenticated = Remote::message("authenticated");

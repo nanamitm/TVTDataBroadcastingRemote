@@ -51,7 +51,12 @@ RemoteClient::RemoteClient(QObject* parent) : QObject(parent) {
         m_authenticated = false; m_selected.clear(); m_targets.clear();
         if (m_socket.closeCode() == QWebSocketProtocol::CloseCodePolicyViolated) m_wanted = false;
         if (m_wanted) { setStatus(QStringLiteral("切断・再接続待ち（操作先の再選択が必要）")); m_reconnect.start(); }
-        else setStatus(m_failure.isEmpty() ? QStringLiteral("切断しました: ") + m_socket.closeReason() : m_failure);
+        else if (!m_failure.isEmpty()) setStatus(m_failure);
+        else if (m_socket.closeReason() == "Authentication locked; restart server")
+            setStatus(QStringLiteral("認証に5回失敗しました。PCの中継サーバーを再起動してください"));
+        else if (m_socket.closeReason() == "Authentication failed")
+            setStatus(QStringLiteral("接続コードが一致しません"));
+        else setStatus(QStringLiteral("切断しました: ") + m_socket.closeReason());
     });
     connect(&m_socket, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
         setStatus(m_failure.isEmpty() ? QStringLiteral("接続エラー: ") + m_socket.errorString() : m_failure);
@@ -77,8 +82,8 @@ void RemoteClient::connectTo(const QString& url, const QString& token, const QSt
             setStatus(QStringLiteral("証明書指紋はSHA-256の64桁で指定してください")); return;
         }
     }
-    if (token.trimmed().size() < 32 || token.trimmed().size() > 4096) {
-        setStatus(QStringLiteral("接続トークンを確認してください")); return;
+    if (!Remote::validToken(token.trimmed().toUtf8())) {
+        setStatus(QStringLiteral("3桁の接続コードを入力してください")); return;
     }
     m_url = parsed; m_token = token.trimmed(); m_pin = QByteArray::fromHex(normalized.toLatin1());
     QSettings settings; settings.setValue("url", parsed.toString()); settings.setValue("fingerprint", normalized);

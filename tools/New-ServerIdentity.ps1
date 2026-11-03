@@ -21,10 +21,15 @@ $privateKey = Join-Path $directoryPath 'server-key.pem'
 $certificate = Join-Path $directoryPath 'server-cert.pem'
 & $OpenSsl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -subj '/CN=TVTest Remote' -keyout $privateKey -out $certificate 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Certificate generation failed' }
-$bytes = New-Object byte[] 32
+$byte = New-Object byte[] 1
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-$token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+try {
+    $token = ''
+    while ($token.Length -lt 3) {
+        $rng.GetBytes($byte)
+        if ($byte[0] -lt 250) { $token += [string]($byte[0] % 10) }
+    }
+} finally { $rng.Dispose() }
 [IO.File]::WriteAllText((Join-Path $directoryPath 'token.txt'), $token + "`n", [Text.Encoding]::ASCII)
 $fingerprint = (& $OpenSsl x509 -in $certificate -noout -fingerprint -sha256) -replace '^.*=', ''
 if ($LASTEXITCODE -ne 0) { throw 'Cannot calculate certificate fingerprint' }

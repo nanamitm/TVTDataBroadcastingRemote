@@ -143,8 +143,8 @@ ApplicationWindow {
                 spacing: 12
                 Label { text: "サーバーURL" }
                 TextField { id: url; text: remote.savedUrl; placeholderText: "wss://192.168.1.10:18765"; Layout.fillWidth: true; inputMethodHints: Qt.ImhUrlCharactersOnly }
-                Label { text: "接続トークン（保存しません）" }
-                TextField { id: token; echoMode: TextInput.Password; Layout.fillWidth: true; inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhSensitiveData }
+                Label { text: "接続コード（3桁・保存しません）" }
+                TextField { id: token; echoMode: TextInput.Password; placeholderText: "3桁の数字"; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData }
                 Label { text: "証明書 SHA-256 指紋" }
                 TextField { id: fingerprint; text: remote.savedFingerprint; Layout.fillWidth: true; placeholderText: "PCで確認した64桁の指紋"; inputMethodHints: Qt.ImhNoPredictiveText }
                 Label { text: "PCで確認した接続情報を入力してください。バックグラウンド移行時は切断します。"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#a9b5c2" }

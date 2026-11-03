@@ -11,7 +11,9 @@
 
 ## Remote messages
 
-Authenticate first. The token is random and at least 32 UTF-8 bytes; recommended server-generated format is 64 hex characters. Never log the auth object.
+Authenticate first. The default connection code is exactly 3 ASCII digits, including possible leading zeros. Existing long tokens of 32-4096 UTF-8 bytes remain supported. Never log the auth object.
+
+In three-digit mode the broker counts authentication failures across all connections. Five failures lock new remote authentications until an explicit broker restart. A successful authentication does not reset this counter. Existing authenticated connections and IPC agents remain connected; they do not bypass the lock for new connections. Authentication failure closes with code 1008 and reason `Authentication failed`; lockout uses `Authentication locked; restart server`. The app stops automatic retries on these policy closures.
 
 ```json
 {"v":1,"type":"auth","token":"<secret>"}

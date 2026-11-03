@@ -9,7 +9,7 @@
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    app.setApplicationName("tvt-remote-server"); app.setApplicationVersion("0.1.0");
+    app.setApplicationName("tvt-remote-server"); app.setApplicationVersion("0.1.1");
     QCommandLineParser parser; parser.addHelpOption(); parser.addVersionOption();
     parser.addOptions({{{"a", "address"}, "Listen IP; LAN requires TLS", "address", "127.0.0.1"},
         {{"p", "port"}, "WebSocket port", "port", "18765"},
@@ -26,15 +26,13 @@ int main(int argc, char** argv) {
     if (!tokenFile.exists()) {
         if (!tokenFile.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return fail("Cannot create token file: " + tokenFile.errorString());
         tokenFile.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-        QByteArray bytes;
-        for (int i = 0; i < 8; ++i) { const auto n = QRandomGenerator::system()->generate(); bytes.append(reinterpret_cast<const char*>(&n), sizeof(n)); }
-        const auto token = bytes.toHex();
+        const auto token = QStringLiteral("%1").arg(QRandomGenerator::system()->bounded(1000), 3, 10, QLatin1Char('0')).toLatin1();
         if (tokenFile.write(token + '\n') != token.size() + 1) return fail("Cannot write token file");
         tokenFile.close();
     }
     if (!tokenFile.open(QIODevice::ReadOnly)) return fail("Cannot read token file: " + tokenFile.errorString());
     const auto token = tokenFile.read(4097).trimmed();
-    if (token.size() < 32 || token.size() > 4096) return fail("Invalid token file length");
+    if (!Remote::validToken(token)) return fail("Token must be 3 ASCII digits or 32-4096 bytes");
     const bool tls = parser.isSet("cert") || parser.isSet("key");
     QSslConfiguration ssl = QSslConfiguration::defaultConfiguration();
     if (tls) {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TVTDataBroadcastingRemote VERSION 0.1.0 LANGUAGES CXX)
+project(TVTDataBroadcastingRemote VERSION 0.1.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network WebSockets)
@@ -82,7 +82,7 @@ if(REMOTE_BUILD_APP)
             QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
-            QT_ANDROID_VERSION_CODE 1
+            QT_ANDROID_VERSION_CODE 2
             QT_ANDROID_MIN_SDK_VERSION 28
             QT_ANDROID_TARGET_SDK_VERSION 35)
         qt_add_android_permission(tvt-remote NAME android.permission.INTERNET)

@@ -37,6 +37,7 @@ private:
     static void send(QWebSocket* socket, const QJsonObject& o);
     static void send(QLocalSocket* socket, const QJsonObject& o);
     QByteArray m_token;
+    int m_failedAuthentications = 0;
     bool m_tls;
     QWebSocketServer m_ws;
     QLocalServer m_local;

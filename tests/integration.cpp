@@ -123,6 +123,35 @@ private slots:
         rogue.write(QByteArray(Remote::MaxMessage + 10, 'x')); rogue.flush();
         QTRY_COMPARE(rogue.state(), QLocalSocket::UnconnectedState);
     }
+    void threeDigitCodeAndGlobalLockout() {
+        const QByteArray code("007");
+        Broker b(code); const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "Short-code TVTest"); QTRY_VERIFY(!a.id.isEmpty());
+        RemoteClient app;
+        QSignalSpy results(&app, &RemoteClient::commandResult);
+        app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(code), {});
+        QTRY_VERIFY(app.connected()); app.claim(a.id); QTRY_COMPARE(app.selected(), a.id);
+        app.press("enter"); QTRY_COMPARE(results.size(), 1); QCOMPARE(results[0][1].toString(), QString("dispatched"));
+        app.release();
+        for (int i = 0; i < 4; ++i) {
+            Client wrong(b.port(), QByteArray("008"));
+            QSignalSpy closed(&wrong.socket, &QWebSocket::disconnected);
+            QTRY_COMPARE(closed.size(), 1); QVERIFY(!wrong.has("authenticated"));
+            QCOMPARE(wrong.socket.closeReason(), QString("Authentication failed"));
+        }
+        // A legitimate connection does not reset the cross-connection counter.
+        Client legitimate(b.port(), code); QTRY_VERIFY(legitimate.has("authenticated"));
+        Client fifth(b.port(), QByteArray("008"));
+        QSignalSpy closed(&fifth.socket, &QWebSocket::disconnected);
+        QTRY_COMPARE(closed.size(), 1);
+        QCOMPARE(fifth.socket.closeReason(), QString("Authentication locked; restart server"));
+        RemoteClient blocked;
+        blocked.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(code), {});
+        QTRY_VERIFY(blocked.status().contains(QStringLiteral("認証に5回失敗"))); QVERIFY(!blocked.connected());
+        // Existing authenticated clients and TVTest remain usable after lockout.
+        app.claim(a.id); QTRY_COMPARE(app.selected(), a.id); app.press("blue");
+        QTRY_COMPARE(results.size(), 2); QCOMPARE(results[1][1].toString(), QString("dispatched"));
+    }
     void fragmentedRegistrationAndTimeout() {
         Broker b(token); const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         QLocalSocket fragmented; fragmented.connectToServer(pipe); QTRY_COMPARE(fragmented.state(), QLocalSocket::ConnectedState);
@@ -190,13 +219,14 @@ private slots:
         auto ssl = QSslConfiguration::defaultConfiguration();
         ssl.setLocalCertificate(m_certificate); ssl.setPrivateKey(m_key);
         ssl.setPeerVerifyMode(QSslSocket::VerifyNone); ssl.setProtocol(QSsl::TlsV1_2OrLater);
-        Broker b(token, true); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipeName(), ssl));
+        const QByteArray code("007");
+        Broker b(code, true); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipeName(), ssl));
         RemoteClient valid;
-        valid.connectTo(QString("wss://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(token),
+        valid.connectTo(QString("wss://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(code),
             QString::fromLatin1(m_certificate.digest(QCryptographicHash::Sha256).toHex()));
         QTRY_VERIFY_WITH_TIMEOUT(valid.connected(), 6000);
         RemoteClient invalid;
-        invalid.connectTo(QString("wss://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(token), QString(64, '0'));
+        invalid.connectTo(QString("wss://127.0.0.1:%1").arg(b.port()), QString::fromLatin1(code), QString(64, '0'));
         QTRY_VERIFY_WITH_TIMEOUT(invalid.status().contains(QStringLiteral("TLS")) || invalid.status().contains(QStringLiteral("証明書")), 6000);
         QVERIFY(!invalid.connected());
     }
