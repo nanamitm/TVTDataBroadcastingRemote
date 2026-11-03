@@ -6,6 +6,16 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network WebSockets)
 qt_standard_project_setup(REQUIRES 6.8)
 option(REMOTE_BUILD_APP "Build the Qt Quick remote" ON)
 option(REMOTE_BUILD_TESTS "Build integration tests" ON)
+option(REMOTE_BUILD_ICON_TOOLS "Build SVG icon export utility" OFF)
+if(REMOTE_BUILD_ICON_TOOLS AND NOT ANDROID)
+    find_package(Qt6 REQUIRED COMPONENTS Gui Svg)
+    qt_add_executable(remote-render-icons EXCLUDE_FROM_ALL tools/render-icons.cpp)
+    set_target_properties(remote-render-icons PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_libraries(remote-render-icons PRIVATE Qt6::Gui Qt6::Svg)
+endif()
+if(WIN32)
+    enable_language(RC)
+endif()
 
 add_library(remote_protocol INTERFACE)
 target_include_directories(remote_protocol INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/shared)
@@ -21,6 +31,11 @@ if(NOT ANDROID)
     target_link_libraries(remote_broker PUBLIC remote_protocol Qt6::Network Qt6::WebSockets)
     qt_add_executable(tvt-remote-server server/main.cpp)
     target_link_libraries(tvt-remote-server PRIVATE remote_broker)
+    if(WIN32)
+        target_sources(tvt-remote-server PRIVATE assets/icons/server.rc)
+        target_include_directories(tvt-remote-server PRIVATE assets/icons)
+        set_property(SOURCE assets/icons/server.rc PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/server.ico")
+    endif()
     qt_add_executable(tvt-remote-demo tools/demo-agent.cpp)
     set_target_properties(tvt-remote-server tvt-remote-demo PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(tvt-remote-demo PRIVATE remote_protocol Qt6::Network)
@@ -54,10 +69,18 @@ if(REMOTE_BUILD_APP)
     qt_add_executable(tvt-remote app/main.cpp)
     qt_add_qml_module(tvt-remote URI TVTRemote VERSION 1.0 QML_FILES app/Main.qml)
     target_link_libraries(tvt-remote PRIVATE remote_client Qt6::Quick Qt6::QuickControls2)
+    qt_add_resources(tvt-remote "application_icon" PREFIX "/icons" BASE "assets/icons" FILES assets/icons/remote.png)
+    if(WIN32)
+        target_sources(tvt-remote PRIVATE assets/icons/remote.rc)
+        target_include_directories(tvt-remote PRIVATE assets/icons)
+        set_property(SOURCE assets/icons/remote.rc PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/remote.ico")
+    endif()
     if(ANDROID)
         set_target_properties(tvt-remote PROPERTIES
             QT_ANDROID_PACKAGE_NAME "io.github.nanamitm.tvtremote"
             QT_ANDROID_APP_NAME "TVTest Remote"
+            QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
+            QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
             QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
             QT_ANDROID_VERSION_CODE 1
             QT_ANDROID_MIN_SDK_VERSION 28

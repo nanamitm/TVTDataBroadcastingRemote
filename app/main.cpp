@@ -1,5 +1,6 @@
 #include "RemoteClient.h"
 #include <QGuiApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -12,6 +13,7 @@
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("nanamitm"); app.setApplicationName("TVTestRemote");
+    app.setWindowIcon(QIcon(QStringLiteral(":/icons/remote.png")));
     QQuickStyle::setStyle("Material");
     if (qEnvironmentVariable("QT_QPA_PLATFORM") == "offscreen") {
         const auto fontId = QFontDatabase::addApplicationFont(

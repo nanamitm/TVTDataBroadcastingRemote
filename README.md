@@ -37,6 +37,19 @@ Windows 中継サーバー（Qt Core / Network / WebSockets）
 | `tools/` | ビルド、証明書作成、デモ接続 |
 | `tests/` | 実ソケット・実パイプによる統合テスト |
 | `docs/protocol.md` | 通信仕様v1 |
+| `assets/icons/` | リモコン／サーバーのSVG、PNG、Windows用ICO |
+| `android/res/` | Android用の標準・アダプティブ・モノクロアイコン |
+
+アイコンの元データはSVGです。Windowsの実行ファイルとリモコンのウインドウにアイコンを設定し、Androidのランチャーには端末の形状・テーマに対応するアイコンを同梱しています。
+
+アイコン素材を更新した場合は、デスクトップQtのGui/Svgを使って生成済みPNG・ICOを更新します（通常のビルドにはSvgは不要です）。
+
+```powershell
+cmake -S . -B build/icon-tools -G Ninja -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/mingw_64 `
+    -DREMOTE_BUILD_APP=OFF -DREMOTE_BUILD_TESTS=OFF -DREMOTE_BUILD_ICON_TOOLS=ON
+cmake --build build/icon-tools --target remote-render-icons
+./build/icon-tools/remote-render-icons.exe .
+```
 
 ## Windowsビルド
 
