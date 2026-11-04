@@ -25,6 +25,7 @@ QString pipeName() { return "tvt-remote-test-" + QUuid::createUuid().toString(QU
 class Agent : public QObject {
 public:
     QLocalSocket socket; QByteArray buffer; QString id; QList<QJsonObject> keys, controls; bool acknowledge = true;
+    QJsonArray channelPages; int channelRequests = 0; // pages sent for each "channels" request
     Agent(const QString& pipe, const QString& label, const QString& token = {}, const QJsonValue& advertised = QJsonValue(QJsonValue::Undefined)) {
         connect(&socket, &QLocalSocket::connected, this, [this, label, token, advertised] {
             auto o = Remote::message("register"); o["name"] = label; o["channel"] = "Test";
@@ -41,6 +42,13 @@ public:
                 if (o["type"] == "key" || o["type"] == "control") {
                     (o["type"] == "key" ? keys : controls).append(o);
                     if (acknowledge) { auto r = Remote::message("result"); r["request"] = o["request"]; r["status"] = "dispatched"; send(r); }
+                }
+                if (o["type"] == "channels") {
+                    ++channelRequests;
+                    for (const auto& value : std::as_const(channelPages)) {
+                        auto page = value.toObject(); page["v"] = 1; page["type"] = "channelPage"; page["request"] = o["request"]; send(page);
+                    }
+                    auto r = Remote::message("result"); r["request"] = o["request"]; r["status"] = "dispatched"; send(r);
                 }
             }
         });
@@ -143,6 +151,53 @@ private slots:
         // A malformed controls field disconnects the agent like other invalid metadata.
         Agent malformed(pipe, "Malformed", "malformed", QJsonValue(5));
         QTRY_COMPARE(malformed.socket.state(), QLocalSocket::UnconnectedState);
+    }
+    void channelListIsPagedAndChannelsAreSelected() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        auto channel = [](int space, int index, int sid, const QString& name, bool program) {
+            QJsonObject c{{"space", space}, {"index", index}, {"remoteControlKey", index + 1}, {"name", name},
+                {"serviceId", sid}, {"networkId", 32736}, {"transportStreamId", 32736}};
+            if (program) c["program"] = QJsonObject{{"name", "News"}, {"start", 1790000000000.0}, {"duration", 1800}};
+            return c;
+        };
+        const QJsonObject current{{"space", 0}, {"index", -1}, {"serviceId", 1032}, {"networkId", 32736}, {"transportStreamId", 32736}};
+        Agent modern(pipe, "Modern", "modern", QJsonObject{{"volume", 10}, {"channel", current}});
+        modern.channelPages = {
+            QJsonObject{{"space", 0}, {"order", 0}, {"spaceName", "UHF"}, {"channels", QJsonArray{channel(0, 0, 1024, "General", true)}}},
+            QJsonObject{{"space", 0}, {"order", 0}, {"spaceName", "UHF"}, {"channels", QJsonArray{channel(0, 1, 1032, "Education", false)}}},
+            QJsonObject{{"space", 2}, {"order", 1}, {"spaceName", "BS"}, {"channels", QJsonArray{channel(2, 0, 101, "BS1", true)}}}};
+        Agent legacy(pipe, "Legacy", "legacy", QJsonObject{{"volume", 10}});
+        QTRY_VERIFY(!modern.id.isEmpty()); QTRY_VERIFY(!legacy.id.isEmpty());
+        RemoteClient app; QSignalSpy results(&app, &RemoteClient::commandResult);
+        app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 2);
+        app.claim(modern.id); QTRY_COMPARE(app.selected(), modern.id);
+        QCOMPARE(app.controls().value("channel").toMap().value("serviceId").toInt(), 1032);
+        // Pages of the same space are merged in order; spaces keep their order.
+        app.requestChannels(); QVERIFY(app.channelsLoading());
+        QTRY_VERIFY(!app.channelsLoading());
+        QCOMPARE(modern.channelRequests, 1);
+        const auto spaces = app.channelSpaces(); QCOMPARE(spaces.size(), 2);
+        QCOMPARE(spaces[0].toMap().value("name").toString(), QString("UHF"));
+        const auto uhf = spaces[0].toMap().value("channels").toList(); QCOMPARE(uhf.size(), 2);
+        QCOMPARE(uhf[0].toMap().value("program").toMap().value("name").toString(), QString("News"));
+        QCOMPARE(spaces[1].toMap().value("space").toInt(), 2);
+        // Selecting sends only the identifying fields as a "channel" control.
+        app.selectChannel(uhf[0].toMap()); QTRY_COMPARE(modern.controls.size(), 1);
+        const auto value = modern.controls[0]["value"].toObject();
+        QCOMPARE(modern.controls[0]["name"].toString(), QString("channel"));
+        QCOMPARE(value.size(), 5); QCOMPARE(value["serviceId"].toInt(), 1024); QCOMPARE(value["index"].toInt(), 0);
+        // Requests are validated, and agents without "channel" never get them.
+        Client raw(b.port()); QTRY_VERIFY(raw.has("targets")); raw.claim(legacy.id); QTRY_VERIFY(raw.has("selection", "claimed"));
+        auto request = Remote::message("channels"); request["id"] = "l1"; request["sequence"] = 1; request["target"] = legacy.id;
+        request["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500); raw.send(request);
+        QTRY_VERIFY(raw.has("result", "unsupported")); QCOMPARE(legacy.channelRequests, 0);
+        auto bad = Remote::message("control"); bad["id"] = "c1"; bad["sequence"] = 2; bad["target"] = legacy.id; bad["name"] = "channel";
+        bad["value"] = QJsonObject{{"space", -1}, {"index", 0}, {"serviceId", 1}, {"networkId", 1}, {"transportStreamId", 1}};
+        bad["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500); raw.send(bad);
+        QTRY_VERIFY(raw.has("result", "invalid_control"));
+        // Pages for a request owned by another client are not relayed to others.
+        QCOMPARE([&] { int n = 0; for (const auto& o : raw.messages) n += o["type"] == "channelPage"; return n; }(), 0);
     }
     void stableIdentitySurvivesPluginRestartAndColdStart() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
@@ -585,6 +640,50 @@ private slots:
         c.control("mute", true); QTRY_VERIFY(mute);
         QTRY_COMPARE(results.size(), 3);
         for (const auto& r : results) QCOMPARE(r[1].toString(), QString("dispatched"));
+        bridge.Stop(); QTRY_COMPARE(c.targets().size(), 0);
+    }
+    void windowBridgePagesChannelListAndTunes() {
+        // A large tuning space is split into pages below the message limit.
+        auto makeSpaces = [] {
+            nlohmann::json bs = nlohmann::json::array();
+            for (int i = 0; i < 150; ++i)
+                bs.push_back({{"space", 1}, {"index", i}, {"remoteControlKey", 0}, {"name", "BS channel " + std::to_string(i)},
+                    {"serviceId", 100 + i}, {"networkId", 4}, {"transportStreamId", 16400 + i},
+                    {"program", {{"name", std::string(60, 'x')}, {"start", 1790000000000LL}, {"duration", 3600}}}});
+            return nlohmann::json::array({
+                {{"space", 0}, {"name", "UHF"}, {"channels", {{{"space", 0}, {"index", 0}, {"remoteControlKey", 1}, {"name", "General"},
+                    {"serviceId", 1024}, {"networkId", 32736}, {"transportStreamId", 32736}}}}},
+                {{"space", 1}, {"name", "BS"}, {"channels", bs}},
+                {{"space", 2}, {"name", "Empty"}, {"channels", nlohmann::json::array()}}});
+        };
+        const auto pages = TvtRemote::Win32Bridge::PaginateChannels(makeSpaces());
+        QVERIFY(pages.size() > 2); std::size_t bsCount = 0;
+        for (const auto& page : pages) {
+            QVERIFY(page.dump().size() < 12000);
+            QVERIFY(page["space"] != 2); // empty spaces are omitted
+            if (page["space"] == 1) { QCOMPARE(page["order"].get<int>(), 1); bsCount += page["channels"].size(); }
+        }
+        QCOMPARE(bsCount, std::size_t(150));
+
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        TvtRemote::Win32Bridge bridge;
+        nlohmann::json tuned;
+        QVERIFY(bridge.Start(GetModuleHandleW(nullptr), [&]() -> nlohmann::json {
+            return {{"targetToken", "channel-bridge"}, {"name", "Channel bridge"}, {"channel", "Test"}, {"enabled", true}, {"mode", "bml"},
+                {"controls", {{"channel", {{"space", 0}, {"index", -1}, {"serviceId", 1024}, {"networkId", 32736}, {"transportStreamId", 32736}}}}}};
+        }, [](const std::string&) { return false; }, [&](const std::string& name, const nlohmann::json& value) {
+            if (name != "channel") return false;
+            tuned = value; return true;
+        }, makeSpaces, pipe.toStdWString()));
+        RemoteClient c;
+        c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.targets().size(), 1);
+        c.claim(c.targets()[0].toMap()["id"].toString()); QTRY_VERIFY(!c.selected().isEmpty());
+        c.requestChannels(); QTRY_VERIFY(!c.channelsLoading());
+        const auto spaces = c.channelSpaces(); QCOMPARE(spaces.size(), 2);
+        const auto bsChannels = spaces[1].toMap().value("channels").toList(); QCOMPARE(bsChannels.size(), 150);
+        c.selectChannel(bsChannels[42].toMap()); QTRY_VERIFY(tuned.is_object());
+        QCOMPARE(tuned["serviceId"].get<int>(), 142); QCOMPARE(tuned["index"].get<int>(), 42); QCOMPARE(tuned.size(), std::size_t(5));
         bridge.Stop(); QTRY_COMPARE(c.targets().size(), 0);
     }
 #endif

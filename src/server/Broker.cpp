@@ -131,6 +131,18 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
         const auto p = m_pending.take(request);
         const auto status = o["status"].toString();
         send(p.client, Remote::result(p.id, status == "dispatched" || status == "unavailable" ? status : "rejected"));
+    } else if (type == "channelPage") {
+        // A page answers a pending "channels" request; it is relayed to that
+        // client only, and the request stays pending until the final result.
+        const auto request = o["request"].toString();
+        if (!m_pending.contains(request) || m_pending[request].agent != s) return;
+        const auto channels = o["channels"].toArray();
+        if (!o["channels"].isArray() || channels.size() > Remote::MaxChannelPageEntries
+            || !Remote::integerIn(o["space"], 0, 255) || !Remote::integerIn(o["order"], 0, 255)) { s->abort(); return; }
+        auto page = Remote::message("channelPage");
+        page["id"] = m_pending[request].id; page["space"] = o["space"]; page["order"] = o["order"];
+        page["spaceName"] = o["spaceName"].toString().left(64); page["channels"] = channels;
+        if (Remote::encode(page).size() <= Remote::MaxMessage) send(m_pending[request].client, page);
     } else if (type != "heartbeat") s->abort();
 }
 void Broker::acceptClients() {
@@ -195,7 +207,7 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         auto r = Remote::message("selection"); r["status"] = status;
         r["target"] = status == "claimed" ? target : c.selected; send(s, r); broadcastTargets(); return;
     }
-    if (type != "key" && type != "control") { s->close(QWebSocketProtocol::CloseCodeProtocolError, "Unknown message"); return; }
+    if (type != "key" && type != "control" && type != "channels") { s->close(QWebSocketProtocol::CloseCodeProtocolError, "Unknown message"); return; }
     const auto id = o["id"].toString();
     const auto sequence = o["sequence"].toDouble();
     if (id.isEmpty() || id.size() > 64 || !o["sequence"].isDouble() || !std::isfinite(sequence)
@@ -210,8 +222,9 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         send(s, Remote::result(id, "expired")); return;
     }
     const bool isControl = type == "control";
+    const bool isChannels = type == "channels";
     if (isControl ? !Remote::validControl(o["name"].toString(), o["value"])
-                  : (!Remote::validKey(o["key"].toString()) || o["action"] != "press")) {
+        : !isChannels && (!Remote::validKey(o["key"].toString()) || o["action"] != "press")) {
         send(s, Remote::result(id, isControl ? "invalid_control" : "invalid_key")); return;
     }
     const auto target = o["target"].toString();
@@ -224,13 +237,15 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
     for (auto it = m_agents.begin(); it != m_agents.end(); ++it) if (it->id == target) {
         // Agents that do not advertise a control (including pre-0.5 plugins,
         // which would disconnect on an unknown IPC type) never receive it.
-        if (isControl && !it->info["controls"].toObject().contains(o["name"].toString())) {
+        // Channel lists come from agents that advertise the "channel" control.
+        const auto required = isChannels ? QStringLiteral("channel") : o["name"].toString();
+        if ((isControl || isChannels) && !it->info["controls"].toObject().contains(required)) {
             send(s, Remote::result(id, "unsupported")); return;
         }
         const auto request = uuid();
-        auto command = Remote::message(isControl ? "control" : "key"); command["request"] = request;
+        auto command = Remote::message(isControl ? "control" : isChannels ? "channels" : "key"); command["request"] = request;
         if (isControl) { command["name"] = o["name"]; command["value"] = o["value"]; }
-        else { command["key"] = o["key"]; command["action"] = "press"; }
+        else if (!isChannels) { command["key"] = o["key"]; command["action"] = "press"; }
         const auto deadline = std::min(timestamp + 2000, static_cast<qint64>(expires));
         command["expires"] = static_cast<double>(deadline);
         m_pending.insert(request, Pending{s, it.key(), id, deadline});

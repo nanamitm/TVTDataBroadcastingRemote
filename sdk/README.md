@@ -19,3 +19,7 @@ TVTDataBroadcastingWV2との連携では、このディレクトリの3つのヘ
 ## 字幕・音量などの値つき操作（0.5.0）
 
 `Win32Bridge::Start` の `Control` コールバック付きオーバーロードを使うと、`("caption", true)`・`("volume", 40)`・`("mute", false)` のような値つき操作をUIスレッドで受け取れます。対応する操作と現在値は、状態コールバックが返すJSONの `controls` オブジェクトで通知してください（例: `{"caption":false,"volume":40,"mute":false}`）。中継サーバーは `controls` に含まれる操作だけをプラグインへ転送するため、`controls` を通知しない従来のプラグインには届きません。操作後は状態がすぐ再通知されます。
+
+## チャンネル一覧と選局（0.6.0）
+
+`Win32Bridge::Start` の `ChannelList` コールバック付きオーバーロードで、チューニング空間ごとのチャンネル一覧（`[{"space":0,"name":"…","channels":[…]}]`）を返すと、ブリッジが16 KiB未満のページに分割して送信します。選局は `Control` コールバックに `("channel", {space,index,serviceId,networkId,transportStreamId})` として届きます。状態の `controls.channel` に現在のチャンネルを通知したプラグインだけが、一覧要求と選局を受け取ります。

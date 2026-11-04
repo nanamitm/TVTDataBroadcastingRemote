@@ -106,6 +106,12 @@ void RemoteClient::stopConnection() {
     m_wanted = false; m_reconnect.stop(); m_watchdog.stop(); m_connectTimeout.stop(); m_socket.abort();
     m_ready = false; m_selected.clear(); m_targets.clear(); m_restorePending.clear();
     m_volumeThrottle.stop(); m_pendingVolume = -1; m_requestedVolume = -1;
+    clearChannels();
+}
+void RemoteClient::clearChannels() {
+    if (m_channelSpaces.isEmpty() && m_channelRequest.isEmpty() && m_channelPages.isEmpty()) return;
+    m_channelSpaces.clear(); m_channelRequest.clear(); m_channelPages.clear();
+    emit channelsChanged();
 }
 void RemoteClient::disconnectFromServer() {
     m_userDisconnected = true; stopConnection(); setStatus(QStringLiteral("未接続"));
@@ -138,15 +144,30 @@ void RemoteClient::claim(const QString& target) {
 void RemoteClient::release() {
     m_lastTarget.clear(); m_lastToken.clear(); m_restorePending.clear();
     QSettings settings; settings.remove("targetId"); settings.remove("targetToken"); settings.remove("targetUrl");
-    m_selected.clear(); emit changed();
+    m_selected.clear(); clearChannels(); emit changed();
     if (m_ready) send(Remote::message("release"));
 }
-void RemoteClient::sendCommand(QJsonObject o) {
-    if (!m_active || !m_ready || m_selected.isEmpty()) return;
-    if (m_socket.bytesToWrite() > 8192) { setStatus(QStringLiteral("送信待ちのため操作を破棄しました")); return; }
+QString RemoteClient::sendCommand(QJsonObject o) {
+    if (!m_active || !m_ready || m_selected.isEmpty()) return {};
+    if (m_socket.bytesToWrite() > 8192) { setStatus(QStringLiteral("送信待ちのため操作を破棄しました")); return {}; }
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     o["target"] = m_selected; o["sequence"] = static_cast<double>(++m_sequence);
     o["expires"] = static_cast<double>(m_serverTime + m_serverClock.elapsed() + 1500);
-    o["id"] = QUuid::createUuid().toString(QUuid::WithoutBraces); send(o);
+    o["id"] = id; send(o);
+    return id;
+}
+void RemoteClient::requestChannels() {
+    if (!controls().contains("channel") || !m_channelRequest.isEmpty()) return;
+    m_channelPages.clear();
+    m_channelRequest = sendCommand(Remote::message("channels"));
+    emit channelsChanged();
+}
+void RemoteClient::selectChannel(const QVariantMap& channel) {
+    // Only the identifying fields are sent; the plugin re-checks them before tuning.
+    QVariantMap value;
+    for (const auto* key : {"space", "index", "serviceId", "networkId", "transportStreamId"})
+        value[QLatin1String(key)] = channel.value(QLatin1String(key));
+    control("channel", value);
 }
 void RemoteClient::press(const QString& key) {
     if (!Remote::validKey(key)) return;
@@ -245,11 +266,13 @@ void RemoteClient::received(const QString& text) {
             const auto token = t.toMap()["targetToken"].toString();
             if (token != m_lastToken) { m_lastToken = token; QSettings().setValue("targetToken", token); }
         }
-        if (!found) m_selected.clear();
+        if (!found) { m_selected.clear(); clearChannels(); }
         emit changed();
         restoreSelection();
     } else if (type == "selection") {
-        const auto status = o["status"].toString(); m_selected = o["target"].toString();
+        const auto status = o["status"].toString();
+        if (m_selected != o["target"].toString()) clearChannels();
+        m_selected = o["target"].toString();
         if (status == "claimed") {
             m_lastTarget = m_selected; m_lastToken.clear();
             for (const auto& t : m_targets) if (t.toMap()["id"].toString() == m_selected)
@@ -269,8 +292,25 @@ void RemoteClient::received(const QString& text) {
             setStatus(status == "identity_conflict" ? QStringLiteral("操作先識別トークンが重複しています。設定を確認してください")
                 : status == "target_gone" ? QStringLiteral("TVTestの再起動を待っています") : QStringLiteral("操作権を解放しました"));
         }
+    } else if (type == "channelPage") {
+        if (m_channelRequest.isEmpty() || o["id"].toString() != m_channelRequest) return;
+        auto& space = m_channelPages[o["order"].toInt()];
+        space["space"] = o["space"].toInt(); space["name"] = o["spaceName"].toString();
+        auto channels = space.value("channels").toList();
+        channels.append(o["channels"].toArray().toVariantList());
+        space["channels"] = channels;
     } else if (type == "result") {
-        const auto status = o["status"].toString(); emit commandResult(o["id"].toString(), status);
+        const auto id = o["id"].toString();
+        const auto status = o["status"].toString(); emit commandResult(id, status);
+        if (!m_channelRequest.isEmpty() && id == m_channelRequest) {
+            m_channelRequest.clear();
+            if (status == "dispatched") {
+                m_channelSpaces.clear();
+                for (const auto& space : std::as_const(m_channelPages)) m_channelSpaces.append(space);
+            }
+            m_channelPages.clear();
+            emit channelsChanged();
+        }
         if (status != "dispatched") setStatus(QStringLiteral("操作結果: ") + status);
     }
 }

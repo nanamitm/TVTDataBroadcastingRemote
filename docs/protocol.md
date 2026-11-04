@@ -103,3 +103,28 @@ Value-carrying operations use `control` instead of `key`. They share the `id`, `
 - IPC: `{"v":1,"type":"control","request":"<broker-request-uuid>","name":"volume","value":40,"expires":...}`, acknowledged with the same `result` message as keys.
 - The native bridge applies controls on the UI thread and refreshes state immediately afterwards, so remotes see the new value without waiting for the 1-second poll. Controls work while the data-broadcasting renderer is disabled.
 - The app coalesces volume changes (at most one per 150 ms, last value wins) to stay within the 30 messages/second limit. Volume steps build on the last requested value for 1.5 seconds so held buttons advance even before the state update arrives.
+
+## Channel list and tuning (0.6.0)
+
+Agents that support tuning advertise the current channel as `controls.channel`:
+
+```json
+{"space":0,"index":-1,"serviceId":1032,"networkId":32736,"transportStreamId":32736}
+```
+
+`space` is the TVTest tuning space and `index` the position in its channel list; the current channel reports `index` -1 (and `space` -1 when unknown). Remotes match list entries by space and IDs.
+
+A remote requests the list with the usual command fields (`id`, `sequence`, `target`, `expires`, ownership):
+
+```json
+{"v":1,"type":"channels","id":"<request-id>","sequence":3,"target":"<uuid>","expires":1790000001500}
+{"v":1,"type":"channelPage","id":"<request-id>","space":0,"order":0,"spaceName":"地デジ(UHF)","channels":[
+  {"space":0,"index":0,"remoteControlKey":1,"name":"NHK総合","serviceId":1024,"networkId":32736,"transportStreamId":32736,
+   "program":{"name":"ニュース","start":1790000000000,"duration":1800}}]}
+{"v":1,"type":"result","id":"<request-id>","status":"dispatched"}
+```
+
+- Each page belongs to one tuning space; a space may span several pages with the same `order`, which also gives the tab order. Spaces without channels are omitted. Pages stay well below the 16 KiB limit (at most 200 entries).
+- `program` is the programme on air when the list was built (`start` in Unix epoch milliseconds, `duration` in seconds) and is omitted when EPG data is unavailable. Disabled channels are not listed.
+- The broker forwards `channels` only to agents that advertise `controls.channel` (otherwise `unsupported`) and relays pages only to the requesting connection. IPC uses `{"type":"channels","request":...,"expires":...}`; the agent answers with `channelPage` messages carrying `request`, then `result`.
+- Tuning is a `control` named `channel` whose value has exactly `space`, `index`, `serviceId`, `networkId` and `transportStreamId` (all non-negative integers). The plugin tunes only if the list entry at that position still has the same IDs, so a changed channel file never tunes a different service.

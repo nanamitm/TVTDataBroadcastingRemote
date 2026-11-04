@@ -222,16 +222,42 @@ ApplicationWindow {
         }
     }
 
-    // 放送メニュー：下から開くシート。字幕を最上部、チャンネル一覧はその下に追加予定
+    // 現在のチャンネルか (一覧の位置はTVTestから分からないため、空間とIDで照合する)
+    function isCurrentChannel(channel) {
+        const c = window.controls.channel
+        return !!c && c.space === channel.space && c.serviceId === channel.serviceId
+            && c.networkId === channel.networkId && c.transportStreamId === channel.transportStreamId
+    }
+    function programTime(program) {
+        const start = new Date(program.start)
+        const end = new Date(program.start + program.duration * 1000)
+        return Qt.formatTime(start, "hh:mm") + "–" + Qt.formatTime(end, "hh:mm")
+    }
+
+    // 放送メニュー：下から開くシート。字幕を最上部、その下に放送波ごとのチャンネル一覧
     Drawer {
         id: broadcastDrawer
+        readonly property bool channelsSupported: window.controls.channel !== undefined
         edge: Qt.BottomEdge
         width: window.width
-        height: Math.min(window.height * 0.7, broadcastContent.implicitHeight + 48 + bottomPadding)
+        height: channelsSupported ? window.height * 0.8
+                : Math.min(window.height * 0.7, broadcastContent.implicitHeight + 48 + bottomPadding)
         bottomPadding: Overlay.overlay ? Overlay.overlay.SafeArea.margins.bottom : 0
         dragMargin: 0 // ボタンからのみ開く（システムのジェスチャーと競合させない）
         background: Rectangle { color: "#1d2936"; radius: 16 }
         Overlay.modal: Rectangle { color: "#99000000" }
+        onOpened: remote.requestChannels()
+        function showCurrentSpace() {
+            const c = window.controls.channel
+            const spaces = remote.channelSpaces
+            let index = channelTabs.currentIndex < spaces.length ? channelTabs.currentIndex : 0
+            for (let i = 0; c && i < spaces.length; i++) {
+                if (spaces[i].space === c.space) { index = i; break }
+            }
+            channelTabs.currentIndex = index
+            // タブが画面幅を超える場合も、選択中のタブ全体が見える位置までスクロールする
+            Qt.callLater(() => channelTabs.contentItem.positionViewAtIndex(channelTabs.currentIndex, ListView.Contain))
+        }
         ColumnLayout {
             id: broadcastContent
             anchors.fill: parent
@@ -259,13 +285,97 @@ ApplicationWindow {
             Rectangle { Layout.fillWidth: true; height: 1; color: "#344657" }
             Label { text: "チャンネル"; font.bold: true }
             Label {
-                text: "チャンネル一覧は今後のバージョンで追加します"
+                visible: !broadcastDrawer.channelsSupported || remote.channelSpaces.length === 0
+                text: !window.canOperate ? "操作するTVTestを選択してください"
+                      : !broadcastDrawer.channelsSupported ? "このTVTestのプラグインはチャンネル一覧に対応していません"
+                      : remote.channelsLoading ? "チャンネル一覧を取得しています…"
+                      : "チャンネルがありません"
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 font.pixelSize: 13
                 color: "#a9b5c2"
             }
-            Item { Layout.fillHeight: true }
+            TabBar {
+                id: channelTabs
+                visible: remote.channelSpaces.length > 0
+                Layout.fillWidth: true
+                // タブの合計幅でレイアウトが広がると左右にはみ出すため、幅はシートに合わせてスクロールさせる
+                Layout.preferredWidth: 0
+                Layout.maximumWidth: broadcastContent.width
+                Material.background: "#1d2936"
+                Repeater {
+                    model: remote.channelSpaces
+                    delegate: TabButton {
+                        required property var modelData
+                        text: modelData.name
+                        width: implicitWidth
+                    }
+                }
+            }
+            StackLayout {
+                visible: remote.channelSpaces.length > 0
+                currentIndex: channelTabs.currentIndex
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Repeater {
+                    model: remote.channelSpaces
+                    delegate: ListView {
+                        id: channelList
+                        required property var modelData
+                        clip: true
+                        model: modelData.channels
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollIndicator.vertical: ScrollIndicator {}
+                        Component.onCompleted: {
+                            for (let i = 0; i < modelData.channels.length; i++) {
+                                if (window.isCurrentChannel(modelData.channels[i])) { positionViewAtIndex(i, ListView.Center); break }
+                            }
+                        }
+                        delegate: ItemDelegate {
+                            id: channelRow
+                            required property var modelData
+                            readonly property bool current: window.isCurrentChannel(modelData)
+                            width: channelList.width
+                            highlighted: current
+                            enabled: window.canOperate
+                            Accessible.name: modelData.name + (modelData.program ? " " + modelData.program.name : "")
+                            onClicked: { remote.selectChannel(modelData); broadcastDrawer.close() }
+                            contentItem: RowLayout {
+                                spacing: 12
+                                Label {
+                                    text: channelRow.modelData.remoteControlKey > 0 ? channelRow.modelData.remoteControlKey : ""
+                                    horizontalAlignment: Text.AlignRight
+                                    Layout.preferredWidth: 28
+                                    font.pixelSize: 18
+                                    color: channelRow.current ? "#5ec9c1" : "#a9c3cf"
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Label {
+                                        text: channelRow.modelData.name
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 16
+                                        font.bold: channelRow.current
+                                        color: "#edf4f8"
+                                    }
+                                    Label {
+                                        visible: !!channelRow.modelData.program
+                                        text: channelRow.modelData.program
+                                              ? window.programTime(channelRow.modelData.program) + "  " + channelRow.modelData.program.name : ""
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        color: "#a9b5c2"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Item { visible: !broadcastDrawer.channelsSupported || remote.channelSpaces.length === 0; Layout.fillHeight: true }
         }
     }
 
@@ -494,6 +604,9 @@ ApplicationWindow {
                 settings.close()
             }
             if (!window.canOperate) { broadcastDrawer.close(); audioPopup.close() }
+        }
+        function onChannelsChanged() {
+            if (broadcastDrawer.visible) broadcastDrawer.showCurrentSpace()
         }
         function onVolumeKeyPressed() {
             if (!settings.opened && !broadcastDrawer.opened) audioPopup.show()

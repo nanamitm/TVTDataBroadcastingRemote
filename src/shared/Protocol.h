@@ -41,13 +41,27 @@ inline bool validKey(const QString& key) {
 // support in state.controls; the broker forwards only advertised controls so
 // older plugins never receive an IPC message type they do not understand.
 inline constexpr int MaxVolume = 100;
-inline bool validControl(const QString& name, const QJsonValue& value) {
+inline bool integerIn(const QJsonValue& value, double low, double high) {
+    if (!value.isDouble()) return false;
+    const auto v = value.toDouble();
+    return v >= low && v <= high && v == static_cast<double>(static_cast<qint64>(v));
+}
+// A channel (0.6.0) is identified by its TVTest tuning space and channel-list
+// index, plus the service and stream IDs that must still match when tuning.
+// In state.controls the current channel may report -1 for unknown positions.
+inline bool validChannel(const QJsonValue& value, bool allowUnknown) {
+    if (!value.isObject()) return false;
+    const auto o = value.toObject();
+    const double first = allowUnknown ? -1 : 0;
+    return o.size() == 5 && integerIn(o["space"], first, 255) && integerIn(o["index"], first, 9999)
+        && integerIn(o["serviceId"], 0, 65535) && integerIn(o["networkId"], 0, 65535)
+        && integerIn(o["transportStreamId"], 0, 65535);
+}
+// `state` is true for values reported by an agent, false for requests.
+inline bool validControl(const QString& name, const QJsonValue& value, bool state = false) {
     if (name == "caption" || name == "mute") return value.isBool();
-    if (name == "volume") {
-        if (!value.isDouble()) return false;
-        const auto v = value.toDouble();
-        return v >= 0 && v <= MaxVolume && v == static_cast<double>(static_cast<int>(v));
-    }
+    if (name == "volume") return integerIn(value, 0, MaxVolume);
+    if (name == "channel") return validChannel(value, state);
     return false;
 }
 // Keeps only known controls with valid values; unknown names are dropped so
@@ -55,9 +69,12 @@ inline bool validControl(const QString& name, const QJsonValue& value) {
 inline QJsonObject controlState(const QJsonObject& controls) {
     QJsonObject result;
     for (auto it = controls.begin(); it != controls.end(); ++it)
-        if (validControl(it.key(), it.value())) result[it.key()] = it.value();
+        if (validControl(it.key(), it.value(), true)) result[it.key()] = it.value();
     return result;
 }
+// Channel-list pages (0.6.0) are relayed from the agent to the requesting
+// client; each page belongs to one tuning space.
+inline constexpr int MaxChannelPageEntries = 200;
 inline QJsonObject result(const QString& id, const QString& status) {
     auto o = message("result"); o["id"] = id; o["status"] = status; return o;
 }
