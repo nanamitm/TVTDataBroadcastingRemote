@@ -244,6 +244,10 @@ ApplicationWindow {
                 : Math.min(window.height * 0.7, broadcastContent.implicitHeight + 48 + bottomPadding)
         bottomPadding: Overlay.overlay ? Overlay.overlay.SafeArea.margins.bottom : 0
         dragMargin: 0 // ボタンからのみ開く（システムのジェスチャーと競合させない）
+        // シート自体をスワイプで閉じられるとチャンネル一覧の縦スクロールと奪い合うため、
+        // 閉じるのは外側のタップと戻るボタンだけにする
+        interactive: false
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: "#1d2936"; radius: 16 }
         Overlay.modal: Rectangle { color: "#99000000" }
         onOpened: remote.requestChannels()
@@ -325,6 +329,8 @@ ApplicationWindow {
                         clip: true
                         model: modelData.channels
                         boundsBehavior: Flickable.StopAtBounds
+                        // スクロールの指の動きで項目が押された表示にならないよう、押下を少し遅らせる
+                        pressDelay: 120
                         ScrollIndicator.vertical: ScrollIndicator {}
                         Component.onCompleted: {
                             for (let i = 0; i < modelData.channels.length; i++) {
