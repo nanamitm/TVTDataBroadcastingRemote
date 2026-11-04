@@ -235,19 +235,25 @@ ApplicationWindow {
     }
 
     // 放送メニュー：下から開くシート。字幕を最上部、その下に放送波ごとのチャンネル一覧
-    Drawer {
+    // Drawerはシートのスワイプで閉じる操作が一覧の縦スクロールと奪い合い、
+    // それを止めると外側のタップや戻るボタンでも閉じなくなるため、下から出すPopupにする
+    Popup {
         id: broadcastDrawer
         readonly property bool channelsSupported: window.controls.channel !== undefined
-        edge: Qt.BottomEdge
+        parent: Overlay.overlay
+        modal: true
         width: window.width
         height: channelsSupported ? window.height * 0.8
                 : Math.min(window.height * 0.7, broadcastContent.implicitHeight + 48 + bottomPadding)
+        x: 0
+        y: parent ? parent.height - height : 0
+        padding: 0
         bottomPadding: Overlay.overlay ? Overlay.overlay.SafeArea.margins.bottom : 0
-        dragMargin: 0 // ボタンからのみ開く（システムのジェスチャーと競合させない）
-        // シート自体をスワイプで閉じられるとチャンネル一覧の縦スクロールと奪い合うため、
-        // 閉じるのは外側のタップと戻るボタンだけにする
-        interactive: false
+        // フォーカスが無いと戻るボタン (Key_Back) がアプリの終了として扱われる
+        focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        enter: Transition { NumberAnimation { property: "y"; from: broadcastDrawer.parent.height; to: broadcastDrawer.parent.height - broadcastDrawer.height; duration: 200; easing.type: Easing.OutCubic } }
+        exit: Transition { NumberAnimation { property: "y"; to: broadcastDrawer.parent.height; duration: 150; easing.type: Easing.InCubic } }
         background: Rectangle { color: "#1d2936"; radius: 16 }
         Overlay.modal: Rectangle { color: "#99000000" }
         onOpened: remote.requestChannels()
@@ -398,6 +404,7 @@ ApplicationWindow {
         // contentItemは既に安全領域内なので、全画面を覆うOverlay側の余白を使う
         y: parent.height - height - 16 - parent.SafeArea.margins.bottom
         padding: 16
+        focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: "#1d2936"; radius: 16; border.color: "#344657" }
         onClosed: autoClose.stop()
