@@ -184,6 +184,25 @@ void RemoteClient::stepVolume(int delta) {
     if (base < 0) return;
     control("volume", std::clamp(base + delta, 0, Remote::MaxVolume));
 }
+bool RemoteClient::volumeKey(int key, bool autoRepeat) {
+    if (key != Qt::Key_VolumeUp && key != Qt::Key_VolumeDown && key != Qt::Key_VolumeMute) return false;
+    const auto available = controls();
+    if (key == Qt::Key_VolumeMute) {
+        if (!autoRepeat && available.contains("mute")) {
+            control("mute", !available.value("mute").toBool()); emit volumeKeyPressed();
+        }
+        return true;
+    }
+    if (!available.contains("volume")) return true;
+    // Android repeats a held key about every 50 ms; advance at the on-screen
+    // button's pace instead of racing to 0 or 100.
+    if (!autoRepeat || !m_volumeKeyRepeat.isValid() || m_volumeKeyRepeat.elapsed() >= 150) {
+        m_volumeKeyRepeat.start();
+        stepVolume(key == Qt::Key_VolumeUp ? 5 : -5);
+    }
+    emit volumeKeyPressed();
+    return true;
+}
 void RemoteClient::restoreSelection() {
     if (!m_ready || !m_selected.isEmpty() || m_restorePending.isEmpty()) return;
     QVariantMap match;

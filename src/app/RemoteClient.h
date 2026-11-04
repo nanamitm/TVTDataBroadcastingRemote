@@ -39,10 +39,14 @@ public:
     // so dragging a slider stays within the broker's input rate limit.
     Q_INVOKABLE void control(const QString& name, const QVariant& value);
     Q_INVOKABLE void stepVolume(int delta);
+    // Handles hardware volume keys (Qt::Key_VolumeUp/Down/Mute). Returns true
+    // when the key is consumed; emits volumeKeyPressed so the UI can show it.
+    bool volumeKey(int key, bool autoRepeat);
     Q_INVOKABLE void setActive(bool active);
 signals:
     void changed();
     void commandResult(QString id, QString status);
+    void volumeKeyPressed();
 private:
     void send(const QJsonObject& o);
     void sendCommand(QJsonObject o);
@@ -58,6 +62,7 @@ private:
     QTimer m_connectTimeout;
     QTimer m_volumeThrottle;
     QElapsedTimer m_volumeRequestedAt;
+    QElapsedTimer m_volumeKeyRepeat;
     int m_pendingVolume = -1;
     int m_requestedVolume = -1;
     QElapsedTimer m_alive;

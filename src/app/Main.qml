@@ -60,6 +60,36 @@ ApplicationWindow {
         }
     }
 
+    // 2行表示のマス（上：機能名、下：現在の状態）
+    component StatusCell: Button {
+        id: statusCell
+        property string title
+        property string detail
+        property bool lit: false
+        Layout.fillWidth: true
+        Layout.minimumHeight: 56
+        enabled: window.canOperate
+        highlighted: lit
+        contentItem: ColumnLayout {
+            spacing: 0
+            Label {
+                text: statusCell.title
+                font.pixelSize: 16
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
+                color: statusCell.enabled ? "#f4f7fa" : "#5a6977"
+            }
+            Label {
+                text: statusCell.detail
+                font.pixelSize: 12
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                color: statusCell.enabled ? (statusCell.lit ? "#f4f7fa" : "#a9c3cf") : "#5a6977"
+            }
+        }
+    }
+
     header: ToolBar {
         Material.background: "#1c2c3b"
         RowLayout {
@@ -146,9 +176,25 @@ ApplicationWindow {
                 DirectionButton { text: "左"; remoteKey: "left"; arrowRotation: 270 }
                 RemoteButton { text: "決定"; remoteKey: "enter"; Layout.minimumHeight: 72; highlighted: true }
                 DirectionButton { text: "右"; remoteKey: "right"; arrowRotation: 90 }
-                Item { Layout.fillWidth: true }
+                // 方向キー下段の左右：放送（字幕・チャンネル）と音量
+                StatusCell {
+                    title: "放送"
+                    detail: window.controls.caption === undefined ? "字幕 --"
+                            : (window.controls.caption ? "字幕 入" : "字幕 切")
+                    lit: window.controls.caption === true
+                    Accessible.name: "放送メニュー（字幕・チャンネル）"
+                    onClicked: broadcastDrawer.open()
+                }
                 DirectionButton { text: "下"; remoteKey: "down"; arrowRotation: 180 }
-                Item { Layout.fillWidth: true }
+                StatusCell {
+                    title: "音量"
+                    detail: window.controls.volume === undefined ? "--"
+                            : (window.controls.mute ? "消音中" : window.controls.volume.toString())
+                    lit: window.controls.mute === true
+                    Accessible.name: "音量メニュー"
+                    enabled: window.canOperate && window.controls.volume !== undefined
+                    onClicked: audioPopup.show()
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -158,89 +204,6 @@ ApplicationWindow {
                 RemoteButton { text: "赤"; remoteKey: "red"; Material.background: "#a53b46" }
                 RemoteButton { text: "緑"; remoteKey: "green"; Material.background: "#327c55" }
                 RemoteButton { text: "黄"; remoteKey: "yellow"; Material.background: "#8a6c23" }
-            }
-            // 字幕・音量（対応プラグインのみ。未対応なら無効表示）
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
-                spacing: 10
-                Button {
-                    readonly property bool on: window.controls.caption === true
-                    text: on ? "字幕 オン" : "字幕 オフ"
-                    Accessible.name: "字幕表示の切替"
-                    Layout.fillWidth: true
-                    Layout.minimumHeight: 52
-                    font.pixelSize: 17
-                    highlighted: on
-                    enabled: window.canOperate && window.controls.caption !== undefined
-                    onClicked: remote.control("caption", !on)
-                }
-                Button {
-                    readonly property bool on: window.controls.mute === true
-                    text: on ? "消音中" : "消音"
-                    Accessible.name: "消音の切替"
-                    Layout.fillWidth: true
-                    Layout.minimumHeight: 52
-                    font.pixelSize: 17
-                    highlighted: on
-                    enabled: window.canOperate && window.controls.mute !== undefined
-                    onClicked: remote.control("mute", !on)
-                }
-            }
-            RowLayout {
-                readonly property bool available: window.canOperate && window.controls.volume !== undefined
-                id: volumeRow
-                Layout.fillWidth: true
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
-                spacing: 6
-                Button {
-                    text: "−"
-                    Accessible.name: "音量を下げる"
-                    font.pixelSize: 22
-                    Layout.preferredWidth: 56
-                    Layout.minimumHeight: 52
-                    enabled: volumeRow.available
-                    autoRepeat: true
-                    autoRepeatDelay: 450
-                    autoRepeatInterval: 160
-                    onClicked: remote.stepVolume(-5)
-                }
-                Slider {
-                    id: volumeSlider
-                    from: 0
-                    to: 100
-                    stepSize: 1
-                    Layout.fillWidth: true
-                    Accessible.name: "音量"
-                    enabled: volumeRow.available
-                    onMoved: remote.control("volume", Math.round(value))
-                    // ドラッグ中はTVTestからの状態通知で位置を戻さない
-                    Binding on value {
-                        when: !volumeSlider.pressed
-                        value: window.controls.volume !== undefined ? window.controls.volume : 0
-                    }
-                }
-                Button {
-                    text: "＋"
-                    Accessible.name: "音量を上げる"
-                    font.pixelSize: 22
-                    Layout.preferredWidth: 56
-                    Layout.minimumHeight: 52
-                    enabled: volumeRow.available
-                    autoRepeat: true
-                    autoRepeatDelay: 450
-                    autoRepeatInterval: 160
-                    onClicked: remote.stepVolume(5)
-                }
-                Label {
-                    text: volumeRow.available ? Math.round(volumeSlider.value).toString() : "--"
-                    horizontalAlignment: Text.AlignRight
-                    Layout.preferredWidth: 32
-                    font.pixelSize: 15
-                    color: window.controls.mute === true ? "#dfbc9c" : "#edf4f8"
-                }
             }
             GridLayout {
                 columns: 3
@@ -255,6 +218,152 @@ ApplicationWindow {
                         remoteKey: modelData
                     }
                 }
+            }
+        }
+    }
+
+    // 放送メニュー：下から開くシート。字幕を最上部、チャンネル一覧はその下に追加予定
+    Drawer {
+        id: broadcastDrawer
+        edge: Qt.BottomEdge
+        width: window.width
+        height: Math.min(window.height * 0.7, broadcastContent.implicitHeight + 48 + bottomPadding)
+        bottomPadding: Overlay.overlay ? Overlay.overlay.SafeArea.margins.bottom : 0
+        dragMargin: 0 // ボタンからのみ開く（システムのジェスチャーと競合させない）
+        background: Rectangle { color: "#1d2936"; radius: 16 }
+        Overlay.modal: Rectangle { color: "#99000000" }
+        ColumnLayout {
+            id: broadcastContent
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 12
+            Rectangle { Layout.alignment: Qt.AlignHCenter; width: 40; height: 4; radius: 2; color: "#4a5d6e" }
+            Label { text: "放送"; font.pixelSize: 20; color: "#edf4f8" }
+            Switch {
+                text: "字幕を表示"
+                Layout.fillWidth: true
+                // 状態はTVTestからの通知で更新するため、タップで直接切り替えない
+                checkable: false
+                checked: window.controls.caption === true
+                enabled: window.canOperate && window.controls.caption !== undefined
+                onClicked: remote.control("caption", !checked)
+            }
+            Label {
+                visible: window.canOperate && window.controls.caption === undefined
+                text: "このTVTestのプラグインは字幕操作に対応していません"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                font.pixelSize: 13
+                color: "#a9b5c2"
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#344657" }
+            Label { text: "チャンネル"; font.bold: true }
+            Label {
+                text: "チャンネル一覧は今後のバージョンで追加します"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                font.pixelSize: 13
+                color: "#a9b5c2"
+            }
+            Item { Layout.fillHeight: true }
+        }
+    }
+
+    // 音量ポップアップ：操作中は開いたまま、操作が止まって数秒で閉じる
+    Popup {
+        id: audioPopup
+        function show() { open(); keepOpen() }
+        function keepOpen() { autoClose.restart() }
+        readonly property bool available: window.canOperate && window.controls.volume !== undefined
+        parent: Overlay.overlay
+        width: Math.min(window.width - 24, 420)
+        x: (parent.width - width) / 2
+        // ナビゲーションバーに重ならないよう、画面下端の安全領域分を上げる
+        // contentItemは既に安全領域内なので、全画面を覆うOverlay側の余白を使う
+        y: parent.height - height - 16 - parent.SafeArea.margins.bottom
+        padding: 16
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: "#1d2936"; radius: 16; border.color: "#344657" }
+        onClosed: autoClose.stop()
+        Timer {
+            id: autoClose
+            interval: 4000
+            onTriggered: {
+                if (volumeSlider.pressed || volumeDown.pressed || volumeUp.pressed) restart()
+                else audioPopup.close()
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "音量"; font.pixelSize: 18; color: "#edf4f8"; Layout.fillWidth: true }
+                Label {
+                    text: audioPopup.available ? Math.round(volumeSlider.value).toString() : "--"
+                    font.pixelSize: 18
+                    color: window.controls.mute === true ? "#dfbc9c" : "#edf4f8"
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Button {
+                    id: volumeDown
+                    text: "−"
+                    Accessible.name: "音量を下げる"
+                    font.pixelSize: 22
+                    Layout.preferredWidth: 56
+                    Layout.minimumHeight: 52
+                    enabled: audioPopup.available
+                    autoRepeat: true
+                    autoRepeatDelay: 450
+                    autoRepeatInterval: 160
+                    onClicked: { remote.stepVolume(-5); audioPopup.keepOpen() }
+                }
+                Slider {
+                    id: volumeSlider
+                    from: 0
+                    to: 100
+                    stepSize: 1
+                    Layout.fillWidth: true
+                    Accessible.name: "音量"
+                    enabled: audioPopup.available
+                    onMoved: { remote.control("volume", Math.round(value)); audioPopup.keepOpen() }
+                    // ドラッグ中はTVTestからの状態通知で位置を戻さない
+                    Binding on value {
+                        when: !volumeSlider.pressed
+                        value: window.controls.volume !== undefined ? window.controls.volume : 0
+                    }
+                }
+                Button {
+                    id: volumeUp
+                    text: "＋"
+                    Accessible.name: "音量を上げる"
+                    font.pixelSize: 22
+                    Layout.preferredWidth: 56
+                    Layout.minimumHeight: 52
+                    enabled: audioPopup.available
+                    autoRepeat: true
+                    autoRepeatDelay: 450
+                    autoRepeatInterval: 160
+                    onClicked: { remote.stepVolume(5); audioPopup.keepOpen() }
+                }
+            }
+            Button {
+                readonly property bool on: window.controls.mute === true
+                text: on ? "消音を解除" : "消音"
+                Accessible.name: "消音の切替"
+                Layout.fillWidth: true
+                Layout.minimumHeight: 48
+                highlighted: on
+                enabled: window.canOperate && window.controls.mute !== undefined
+                onClicked: { remote.control("mute", !on); audioPopup.keepOpen() }
+            }
+            Label {
+                text: "本体の音量ボタンでも操作できます"
+                font.pixelSize: 12
+                color: "#a9b5c2"
+                Layout.fillWidth: true
             }
         }
     }
@@ -384,6 +493,10 @@ ApplicationWindow {
                 settings.pendingTarget = ""
                 settings.close()
             }
+            if (!window.canOperate) { broadcastDrawer.close(); audioPopup.close() }
+        }
+        function onVolumeKeyPressed() {
+            if (!settings.opened && !broadcastDrawer.opened) audioPopup.show()
         }
     }
     Component.onCompleted: {

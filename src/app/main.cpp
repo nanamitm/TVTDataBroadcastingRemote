@@ -6,11 +6,38 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QImage>
+#include <QKeyEvent>
 #include <QTimer>
 #include <QFontDatabase>
 #include <QStandardPaths>
 
+namespace {
+// Routes hardware volume keys to TVTest's volume while the app is in front.
+// The key is consumed at the window before it reaches any QML item.
+class VolumeKeyFilter : public QObject {
+public:
+    explicit VolumeKeyFilter(RemoteClient& remote) : m_remote(remote) {}
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_VolumeUp || key->key() == Qt::Key_VolumeDown || key->key() == Qt::Key_VolumeMute) {
+                if (event->type() == QEvent::KeyPress) m_remote.volumeKey(key->key(), key->isAutoRepeat());
+                return true;
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+private:
+    RemoteClient& m_remote;
+};
+}
+
 int main(int argc, char** argv) {
+#ifdef Q_OS_ANDROID
+    // Qt's Android input layer leaves volume keys to the system unless this is
+    // set; the app plays no audio, so the keys control TVTest instead.
+    qputenv("QT_ANDROID_VOLUME_KEYS", "1");
+#endif
     QGuiApplication app(argc, argv);
     app.setOrganizationName("nanamitm"); app.setApplicationName("TVTestRemote");
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/remote.png")));
@@ -42,6 +69,8 @@ int main(int argc, char** argv) {
             if (state == Qt::ApplicationActive) remote.setActive(true);
             else if (state == Qt::ApplicationHidden || state == Qt::ApplicationSuspended) remote.setActive(false);
         });
+    VolumeKeyFilter volumeKeys(remote);
+    app.installEventFilter(&volumeKeys);
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("remote", &remote);
     engine.rootContext()->setContextProperty("japaneseFontFamily", japaneseFontFamily);

@@ -118,6 +118,17 @@ private slots:
         state["controls"] = QJsonObject{{"caption", true}, {"volume", 60}, {"mute", true}}; modern.send(state);
         QTRY_COMPARE(app.controls().value("volume").toInt(), 60); QCOMPARE(app.controls().value("mute").toBool(), true);
         app.stepVolume(-5); QTRY_COMPARE(modern.controls.size(), 5); QCOMPARE(modern.controls[4]["value"].toInt(), 55);
+        // Hardware volume keys step from the last request; fast auto-repeats are paced.
+        QSignalSpy shown(&app, &RemoteClient::volumeKeyPressed);
+        QTest::qWait(200);
+        QVERIFY(app.volumeKey(Qt::Key_VolumeUp, false));
+        QTRY_COMPARE(modern.controls.size(), 6); QCOMPARE(modern.controls[5]["value"].toInt(), 60);
+        QVERIFY(app.volumeKey(Qt::Key_VolumeUp, true)); // within 150 ms: shown, not stepped
+        QTest::qWait(250); QCOMPARE(modern.controls.size(), 6); QCOMPARE(shown.size(), 2);
+        QVERIFY(app.volumeKey(Qt::Key_VolumeMute, false));
+        QTRY_COMPARE(modern.controls.size(), 7); QCOMPARE(modern.controls[6]["name"].toString(), QString("mute"));
+        QCOMPARE(modern.controls[6]["value"], QJsonValue(false)); // state reported mute=true
+        QVERIFY(!app.volumeKey(Qt::Key_A, false));
         // Legacy agents never receive control messages (they would disconnect on them).
         Client raw(b.port()); QTRY_VERIFY(raw.has("targets")); raw.claim(legacy.id); QTRY_VERIFY(raw.has("selection", "claimed"));
         auto control = Remote::message("control"); control["id"] = "c1"; control["sequence"] = 1; control["target"] = legacy.id;
