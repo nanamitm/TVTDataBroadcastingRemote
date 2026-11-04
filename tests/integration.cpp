@@ -24,11 +24,13 @@ namespace {
 QString pipeName() { return "tvt-remote-test-" + QUuid::createUuid().toString(QUuid::WithoutBraces); }
 class Agent : public QObject {
 public:
-    QLocalSocket socket; QByteArray buffer; QString id; QList<QJsonObject> keys; bool acknowledge = true;
-    Agent(const QString& pipe, const QString& label, const QString& token = {}) {
-        connect(&socket, &QLocalSocket::connected, this, [this, label, token] {
+    QLocalSocket socket; QByteArray buffer; QString id; QList<QJsonObject> keys, controls; bool acknowledge = true;
+    Agent(const QString& pipe, const QString& label, const QString& token = {}, const QJsonValue& advertised = QJsonValue(QJsonValue::Undefined)) {
+        connect(&socket, &QLocalSocket::connected, this, [this, label, token, advertised] {
             auto o = Remote::message("register"); o["name"] = label; o["channel"] = "Test";
-            o["enabled"] = true; o["mode"] = "bml"; o["targetToken"] = token; send(o);
+            o["enabled"] = true; o["mode"] = "bml"; o["targetToken"] = token;
+            if (!advertised.isUndefined()) o["controls"] = advertised;
+            send(o);
         });
         connect(&socket, &QLocalSocket::readyRead, this, [this] {
             buffer += socket.readAll();
@@ -36,8 +38,8 @@ public:
                 const auto end = buffer.indexOf('\n'); QJsonObject o;
                 Remote::decode(buffer.left(end), o); buffer.remove(0, end + 1);
                 if (o["type"] == "registered") id = o["target"].toString();
-                if (o["type"] == "key") {
-                    keys.append(o);
+                if (o["type"] == "key" || o["type"] == "control") {
+                    (o["type"] == "key" ? keys : controls).append(o);
                     if (acknowledge) { auto r = Remote::message("result"); r["request"] = o["request"]; r["status"] = "dispatched"; send(r); }
                 }
             }
@@ -89,6 +91,47 @@ private slots:
         QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 1);
         app.claim(a.id); QTRY_COMPARE(app.selected(), a.id); app.press("enter");
         QTRY_COMPARE(results.size(), 1); QCOMPARE(results[0][1].toString(), QString("dispatched"));
+    }
+    void controlsAreAdvertisedValidatedAndRouted() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent modern(pipe, "Modern", "modern", QJsonObject{{"caption", false}, {"volume", 40}, {"mute", false},
+            {"future", "ignored"}, {"bogus", 500}});
+        Agent legacy(pipe, "Legacy", "legacy");
+        QTRY_VERIFY(!modern.id.isEmpty()); QTRY_VERIFY(!legacy.id.isEmpty());
+        RemoteClient app; QSignalSpy results(&app, &RemoteClient::commandResult);
+        app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 2);
+        app.claim(modern.id); QTRY_COMPARE(app.selected(), modern.id);
+        // Unknown names and out-of-range values are dropped by the broker.
+        QCOMPARE(app.controls().keys(), QStringList({"caption", "mute", "volume"}));
+        app.control("caption", true); app.control("mute", true);
+        QTRY_COMPARE(modern.controls.size(), 2);
+        QCOMPARE(modern.controls[0]["name"].toString(), QString("caption")); QCOMPARE(modern.controls[0]["value"], QJsonValue(true));
+        QTRY_COMPARE(results.size(), 2); QCOMPARE(results[1][1].toString(), QString("dispatched"));
+        // A slider drag is coalesced: the first and last values are delivered.
+        for (int v = 41; v <= 60; ++v) app.control("volume", v);
+        QTRY_COMPARE(modern.controls.size(), 4);
+        QCOMPARE(modern.controls[2]["value"].toInt(), 41); QCOMPARE(modern.controls[3]["value"].toInt(), 60);
+        QTest::qWait(250); QCOMPARE(modern.controls.size(), 4);
+        // Agent state updates are reflected in the selected target's controls.
+        auto state = Remote::message("state"); state["name"] = "Modern"; state["targetToken"] = "modern";
+        state["controls"] = QJsonObject{{"caption", true}, {"volume", 60}, {"mute", true}}; modern.send(state);
+        QTRY_COMPARE(app.controls().value("volume").toInt(), 60); QCOMPARE(app.controls().value("mute").toBool(), true);
+        app.stepVolume(-5); QTRY_COMPARE(modern.controls.size(), 5); QCOMPARE(modern.controls[4]["value"].toInt(), 55);
+        // Legacy agents never receive control messages (they would disconnect on them).
+        Client raw(b.port()); QTRY_VERIFY(raw.has("targets")); raw.claim(legacy.id); QTRY_VERIFY(raw.has("selection", "claimed"));
+        auto control = Remote::message("control"); control["id"] = "c1"; control["sequence"] = 1; control["target"] = legacy.id;
+        control["name"] = "volume"; control["value"] = 10;
+        control["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500); raw.send(control);
+        QTRY_VERIFY(raw.has("result", "unsupported"));
+        control["id"] = "c2"; control["sequence"] = 2; control["value"] = 101; raw.send(control);
+        QTRY_VERIFY(raw.has("result", "invalid_control"));
+        control["id"] = "c3"; control["sequence"] = 3; control["name"] = "caption"; control["value"] = 1; raw.send(control);
+        QTRY_COMPARE([&] { int n = 0; for (const auto& o : raw.messages) n += o["status"] == "invalid_control"; return n; }(), 2);
+        QCOMPARE(legacy.controls.size(), 0); QCOMPARE(legacy.socket.state(), QLocalSocket::ConnectedState);
+        // A malformed controls field disconnects the agent like other invalid metadata.
+        Agent malformed(pipe, "Malformed", "malformed", QJsonValue(5));
+        QTRY_COMPARE(malformed.socket.state(), QLocalSocket::UnconnectedState);
     }
     void stableIdentitySurvivesPluginRestartAndColdStart() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
@@ -500,6 +543,37 @@ private slots:
         c.claim(c.targets()[0].toMap()["id"].toString()); QTRY_VERIFY(!c.selected().isEmpty());
         c.press("data"); QTRY_COMPARE(pressed, QString("data")); QCOMPARE(dispatchThread, mainThread);
         QTRY_COMPARE(results.size(), 1);
+        QVERIFY(c.controls().isEmpty()); // no controls advertised by this bridge
+        bridge.Stop(); QTRY_COMPARE(c.targets().size(), 0);
+    }
+    void windowBridgeAppliesControlsAndReportsState() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        TvtRemote::Win32Bridge bridge;
+        const auto mainThread = GetCurrentThreadId();
+        DWORD controlThread = 0; bool caption = false; int volume = 30; bool mute = false;
+        QVERIFY(bridge.Start(GetModuleHandleW(nullptr), [&]() -> nlohmann::json {
+            return {{"targetToken", "control-bridge"}, {"name", "Control bridge"}, {"channel", "Test"}, {"enabled", true},
+                {"mode", "bml"}, {"controls", {{"caption", caption}, {"volume", volume}, {"mute", mute}}}};
+        }, [](const std::string&) { return false; }, [&](const std::string& name, const nlohmann::json& value) {
+            controlThread = GetCurrentThreadId();
+            if (name == "caption") caption = value.get<bool>();
+            else if (name == "volume") volume = value.get<int>();
+            else if (name == "mute") mute = value.get<bool>();
+            else return false;
+            return true;
+        }, pipe.toStdWString()));
+        RemoteClient c; QSignalSpy results(&c, &RemoteClient::commandResult);
+        c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(c.connected()); QTRY_COMPARE(c.targets().size(), 1);
+        c.claim(c.targets()[0].toMap()["id"].toString()); QTRY_VERIFY(!c.selected().isEmpty());
+        QCOMPARE(c.controls().value("volume").toInt(), 30);
+        c.control("volume", 72); QTRY_COMPARE(volume, 72); QCOMPARE(controlThread, mainThread);
+        // The bridge refreshes state right after a control, well before the 1 s poll.
+        QTRY_COMPARE_WITH_TIMEOUT(c.controls().value("volume").toInt(), 72, 800);
+        c.control("caption", true); QTRY_VERIFY(caption); QTRY_VERIFY(c.controls().value("caption").toBool());
+        c.control("mute", true); QTRY_VERIFY(mute);
+        QTRY_COMPARE(results.size(), 3);
+        for (const auto& r : results) QCOMPARE(r[1].toString(), QString("dispatched"));
         bridge.Stop(); QTRY_COMPARE(c.targets().size(), 0);
     }
 #endif

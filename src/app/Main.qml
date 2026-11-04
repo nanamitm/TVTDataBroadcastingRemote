@@ -19,6 +19,8 @@ ApplicationWindow {
         }
         return null
     }
+    readonly property var controls: remote.controls
+    readonly property bool canOperate: remote.connected && remote.selected.length > 0
 
     component RemoteButton: Button {
         property string remoteKey
@@ -156,6 +158,89 @@ ApplicationWindow {
                 RemoteButton { text: "赤"; remoteKey: "red"; Material.background: "#a53b46" }
                 RemoteButton { text: "緑"; remoteKey: "green"; Material.background: "#327c55" }
                 RemoteButton { text: "黄"; remoteKey: "yellow"; Material.background: "#8a6c23" }
+            }
+            // 字幕・音量（対応プラグインのみ。未対応なら無効表示）
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+                spacing: 10
+                Button {
+                    readonly property bool on: window.controls.caption === true
+                    text: on ? "字幕 オン" : "字幕 オフ"
+                    Accessible.name: "字幕表示の切替"
+                    Layout.fillWidth: true
+                    Layout.minimumHeight: 52
+                    font.pixelSize: 17
+                    highlighted: on
+                    enabled: window.canOperate && window.controls.caption !== undefined
+                    onClicked: remote.control("caption", !on)
+                }
+                Button {
+                    readonly property bool on: window.controls.mute === true
+                    text: on ? "消音中" : "消音"
+                    Accessible.name: "消音の切替"
+                    Layout.fillWidth: true
+                    Layout.minimumHeight: 52
+                    font.pixelSize: 17
+                    highlighted: on
+                    enabled: window.canOperate && window.controls.mute !== undefined
+                    onClicked: remote.control("mute", !on)
+                }
+            }
+            RowLayout {
+                readonly property bool available: window.canOperate && window.controls.volume !== undefined
+                id: volumeRow
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+                spacing: 6
+                Button {
+                    text: "−"
+                    Accessible.name: "音量を下げる"
+                    font.pixelSize: 22
+                    Layout.preferredWidth: 56
+                    Layout.minimumHeight: 52
+                    enabled: volumeRow.available
+                    autoRepeat: true
+                    autoRepeatDelay: 450
+                    autoRepeatInterval: 160
+                    onClicked: remote.stepVolume(-5)
+                }
+                Slider {
+                    id: volumeSlider
+                    from: 0
+                    to: 100
+                    stepSize: 1
+                    Layout.fillWidth: true
+                    Accessible.name: "音量"
+                    enabled: volumeRow.available
+                    onMoved: remote.control("volume", Math.round(value))
+                    // ドラッグ中はTVTestからの状態通知で位置を戻さない
+                    Binding on value {
+                        when: !volumeSlider.pressed
+                        value: window.controls.volume !== undefined ? window.controls.volume : 0
+                    }
+                }
+                Button {
+                    text: "＋"
+                    Accessible.name: "音量を上げる"
+                    font.pixelSize: 22
+                    Layout.preferredWidth: 56
+                    Layout.minimumHeight: 52
+                    enabled: volumeRow.available
+                    autoRepeat: true
+                    autoRepeatDelay: 450
+                    autoRepeatInterval: 160
+                    onClicked: remote.stepVolume(5)
+                }
+                Label {
+                    text: volumeRow.available ? Math.round(volumeSlider.value).toString() : "--"
+                    horizontalAlignment: Text.AlignRight
+                    Layout.preferredWidth: 32
+                    font.pixelSize: 15
+                    color: window.controls.mute === true ? "#dfbc9c" : "#edf4f8"
+                }
             }
             GridLayout {
                 columns: 3

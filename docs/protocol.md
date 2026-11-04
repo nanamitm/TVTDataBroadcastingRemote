@@ -82,3 +82,24 @@ Only the recipient IPC connection may acknowledge a request. `dispatched`/`unava
 `register` and `state` accept optional `targetToken` (empty for legacy plugins, otherwise 1-64 ASCII letters/digits, dot, underscore or hyphen, case-sensitive). Invalid values disconnect the agent; values are never truncated. Targets expose `targetToken` and `identityConflict`. This is public routing metadata, not authentication. Plugin INI key `RemoteTargetToken` persists across process restarts and is editable in plugin settings; an absent key is generated and saved once.
 
 A client remembers the token with its broker URL. When the selected agent disappears, it waits for a matching token and issues a new claim to its new session ID. Automatic claims include `targetToken`; the broker checks that the requested session still has that token and exactly one registered agent has it, preventing list/claim races. Duplicate tokens return `selection.status=identity_conflict`. Manual ID-only claims remain possible. A token is never used as the command target: key requests and pending results remain tied to the current session ID. Busy targets are not taken, and inputs are never replayed.
+
+## Controls: caption and volume (0.5.0)
+
+Value-carrying operations use `control` instead of `key`. They share the `id`, `sequence`, `target`, `expires`, ownership and result rules of keys (including the per-connection sequence counter), and are never retried or replayed.
+
+```json
+{"v":1,"type":"control","id":"<request-id>","sequence":2,"target":"<uuid>","name":"volume","value":40,"expires":1790000001500}
+{"v":1,"type":"result","id":"<request-id>","status":"dispatched"}
+```
+
+| `name` | `value` | Effect |
+|---|---|---|
+| `caption` | boolean | Show/hide captions (same as the plugin's caption toggle) |
+| `mute` | boolean | TVTest mute |
+| `volume` | integer 0-100 | TVTest volume (absolute) |
+
+- Agents advertise supported controls and their current values in `register`/`state` as an optional `controls` object, e.g. `{"caption":false,"volume":40,"mute":false}`. A non-object `controls` disconnects the agent. The broker keeps only known names with valid values (unknown names are dropped for forward compatibility) and exposes them on each entry of `targets`. Targets without controls (older plugins) omit the field.
+- The broker forwards a control only to an agent that advertises that name; otherwise it answers `unsupported`. Older agents therefore never receive an IPC `control` message. Invalid names or values return `invalid_control`.
+- IPC: `{"v":1,"type":"control","request":"<broker-request-uuid>","name":"volume","value":40,"expires":...}`, acknowledged with the same `result` message as keys.
+- The native bridge applies controls on the UI thread and refreshes state immediately afterwards, so remotes see the new value without waiting for the 1-second poll. Controls work while the data-broadcasting renderer is disabled.
+- The app coalesces volume changes (at most one per 150 ms, last value wins) to stay within the 30 messages/second limit. Volume steps build on the last requested value for 1.5 seconds so held buttons advance even before the state update arrives.

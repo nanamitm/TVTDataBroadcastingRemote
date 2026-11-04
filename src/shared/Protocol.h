@@ -37,6 +37,27 @@ inline bool validKey(const QString& key) {
         "6", "7", "8", "9", "10", "11", "12"};
     return keys.contains(key);
 }
+// Value-carrying controls (protocol 0.5.0). Agents advertise the controls they
+// support in state.controls; the broker forwards only advertised controls so
+// older plugins never receive an IPC message type they do not understand.
+inline constexpr int MaxVolume = 100;
+inline bool validControl(const QString& name, const QJsonValue& value) {
+    if (name == "caption" || name == "mute") return value.isBool();
+    if (name == "volume") {
+        if (!value.isDouble()) return false;
+        const auto v = value.toDouble();
+        return v >= 0 && v <= MaxVolume && v == static_cast<double>(static_cast<int>(v));
+    }
+    return false;
+}
+// Keeps only known controls with valid values; unknown names are dropped so
+// newer plugins remain compatible with this broker.
+inline QJsonObject controlState(const QJsonObject& controls) {
+    QJsonObject result;
+    for (auto it = controls.begin(); it != controls.end(); ++it)
+        if (validControl(it.key(), it.value())) result[it.key()] = it.value();
+    return result;
+}
 inline QJsonObject result(const QString& id, const QString& status) {
     auto o = message("result"); o["id"] = id; o["status"] = status; return o;
 }

@@ -2,6 +2,7 @@
 #include <QJsonArray>
 #include <QSettings>
 #include <QUuid>
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -26,6 +27,13 @@ RemoteClient::RemoteClient(QObject* parent) : QObject(parent) {
         m_socket.abort();
         setStatus(QStringLiteral("接続がタイムアウトしました。再接続待ち"));
         m_reconnect.start();
+    });
+    // Volume drags send at most ~7 updates per second; the last value always wins.
+    m_volumeThrottle.setSingleShot(true); m_volumeThrottle.setInterval(150);
+    connect(&m_volumeThrottle, &QTimer::timeout, this, [this] {
+        if (m_pendingVolume < 0) return;
+        const auto volume = m_pendingVolume; m_pendingVolume = -1;
+        sendVolume(volume); m_volumeThrottle.start();
     });
     m_watchdog.setInterval(2000);
     connect(&m_watchdog, &QTimer::timeout, this, [this] {
@@ -97,6 +105,7 @@ void RemoteClient::connectTo(const QString& url) {
 void RemoteClient::stopConnection() {
     m_wanted = false; m_reconnect.stop(); m_watchdog.stop(); m_connectTimeout.stop(); m_socket.abort();
     m_ready = false; m_selected.clear(); m_targets.clear(); m_restorePending.clear();
+    m_volumeThrottle.stop(); m_pendingVolume = -1; m_requestedVolume = -1;
 }
 void RemoteClient::disconnectFromServer() {
     m_userDisconnected = true; stopConnection(); setStatus(QStringLiteral("未接続"));
@@ -132,13 +141,48 @@ void RemoteClient::release() {
     m_selected.clear(); emit changed();
     if (m_ready) send(Remote::message("release"));
 }
-void RemoteClient::press(const QString& key) {
-    if (!m_active || !m_ready || m_selected.isEmpty() || !Remote::validKey(key)) return;
+void RemoteClient::sendCommand(QJsonObject o) {
+    if (!m_active || !m_ready || m_selected.isEmpty()) return;
     if (m_socket.bytesToWrite() > 8192) { setStatus(QStringLiteral("送信待ちのため操作を破棄しました")); return; }
-    auto o = Remote::message("key"); o["target"] = m_selected; o["key"] = key;
-    o["action"] = "press"; o["sequence"] = static_cast<double>(++m_sequence);
+    o["target"] = m_selected; o["sequence"] = static_cast<double>(++m_sequence);
     o["expires"] = static_cast<double>(m_serverTime + m_serverClock.elapsed() + 1500);
     o["id"] = QUuid::createUuid().toString(QUuid::WithoutBraces); send(o);
+}
+void RemoteClient::press(const QString& key) {
+    if (!Remote::validKey(key)) return;
+    auto o = Remote::message("key"); o["key"] = key; o["action"] = "press"; sendCommand(o);
+}
+QVariantMap RemoteClient::controls() const {
+    if (m_selected.isEmpty()) return {};
+    for (const auto& t : m_targets) {
+        const auto target = t.toMap();
+        if (target.value("id").toString() == m_selected) return target.value("controls").toMap();
+    }
+    return {};
+}
+void RemoteClient::sendVolume(int volume) {
+    auto o = Remote::message("control"); o["name"] = "volume"; o["value"] = volume; sendCommand(o);
+}
+void RemoteClient::control(const QString& name, const QVariant& value) {
+    if (!controls().contains(name)) return;
+    if (name == "volume") {
+        bool ok = false; const auto volume = value.toInt(&ok);
+        if (!ok || volume < 0 || volume > Remote::MaxVolume) return;
+        m_requestedVolume = volume; m_volumeRequestedAt.start();
+        if (m_volumeThrottle.isActive()) { m_pendingVolume = volume; return; }
+        sendVolume(volume); m_volumeThrottle.start(); return;
+    }
+    const auto json = QJsonValue::fromVariant(value);
+    if (!Remote::validControl(name, json)) return;
+    auto o = Remote::message("control"); o["name"] = name; o["value"] = json; sendCommand(o);
+}
+void RemoteClient::stepVolume(int delta) {
+    // Repeated steps build on the last requested value until the plugin's state
+    // catches up, so holding the button does not resend the same volume.
+    auto base = m_requestedVolume >= 0 && m_volumeRequestedAt.isValid() && m_volumeRequestedAt.elapsed() < 1500
+        ? m_requestedVolume : controls().value("volume", -1).toInt();
+    if (base < 0) return;
+    control("volume", std::clamp(base + delta, 0, Remote::MaxVolume));
 }
 void RemoteClient::restoreSelection() {
     if (!m_ready || !m_selected.isEmpty() || m_restorePending.isEmpty()) return;

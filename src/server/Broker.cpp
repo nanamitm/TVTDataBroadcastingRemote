@@ -119,6 +119,10 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
         a.info = {{"id", a.id}, {"name", o["name"].toString().left(100)},
             {"targetToken", token}, {"channel", o["channel"].toString().left(100)}, {"pid", o["pid"].toInt()},
             {"enabled", o["enabled"].toBool()}, {"mode", o["mode"].toString().left(20)}};
+        if (o.contains("controls")) {
+            if (!o["controls"].isObject()) { s->abort(); return; }
+            a.info["controls"] = Remote::controlState(o["controls"].toObject());
+        }
         if (type == "register") { auto reply = Remote::message("registered"); reply["target"] = a.id; send(s, reply); }
         broadcastTargets();
     } else if (type == "result") {
@@ -191,7 +195,7 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         auto r = Remote::message("selection"); r["status"] = status;
         r["target"] = status == "claimed" ? target : c.selected; send(s, r); broadcastTargets(); return;
     }
-    if (type != "key") { s->close(QWebSocketProtocol::CloseCodeProtocolError, "Unknown message"); return; }
+    if (type != "key" && type != "control") { s->close(QWebSocketProtocol::CloseCodeProtocolError, "Unknown message"); return; }
     const auto id = o["id"].toString();
     const auto sequence = o["sequence"].toDouble();
     if (id.isEmpty() || id.size() > 64 || !o["sequence"].isDouble() || !std::isfinite(sequence)
@@ -205,8 +209,10 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         || expires <= static_cast<double>(timestamp) || expires > static_cast<double>(timestamp + 5000)) {
         send(s, Remote::result(id, "expired")); return;
     }
-    if (!Remote::validKey(o["key"].toString()) || o["action"] != "press") {
-        send(s, Remote::result(id, "invalid_key")); return;
+    const bool isControl = type == "control";
+    if (isControl ? !Remote::validControl(o["name"].toString(), o["value"])
+                  : (!Remote::validKey(o["key"].toString()) || o["action"] != "press")) {
+        send(s, Remote::result(id, isControl ? "invalid_control" : "invalid_key")); return;
     }
     const auto target = o["target"].toString();
     if (target.isEmpty() || c.selected != target || m_owners.value(target) != s) {
@@ -216,9 +222,15 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
     for (const auto& p : std::as_const(m_pending)) if (p.client == s) ++count;
     if (count >= 8 || m_pending.size() >= 128) { send(s, Remote::result(id, "busy")); return; }
     for (auto it = m_agents.begin(); it != m_agents.end(); ++it) if (it->id == target) {
+        // Agents that do not advertise a control (including pre-0.5 plugins,
+        // which would disconnect on an unknown IPC type) never receive it.
+        if (isControl && !it->info["controls"].toObject().contains(o["name"].toString())) {
+            send(s, Remote::result(id, "unsupported")); return;
+        }
         const auto request = uuid();
-        auto command = Remote::message("key"); command["request"] = request;
-        command["key"] = o["key"]; command["action"] = "press";
+        auto command = Remote::message(isControl ? "control" : "key"); command["request"] = request;
+        if (isControl) { command["name"] = o["name"]; command["value"] = o["value"]; }
+        else { command["key"] = o["key"]; command["action"] = "press"; }
         const auto deadline = std::min(timestamp + 2000, static_cast<qint64>(expires));
         command["expires"] = static_cast<double>(deadline);
         m_pending.insert(request, Pending{s, it.key(), id, deadline});
