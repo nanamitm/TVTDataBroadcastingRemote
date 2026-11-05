@@ -21,6 +21,9 @@ class RemoteClient : public QObject {
     // in tuning-space order. Filled by requestChannels().
     Q_PROPERTY(QVariantList channelSpaces READ channelSpaces NOTIFY channelsChanged)
     Q_PROPERTY(bool channelsLoading READ channelsLoading NOTIFY channelsChanged)
+    // BonDrivers that can be tuned (0.7.0) and the one channelSpaces belongs to.
+    Q_PROPERTY(QStringList channelDrivers READ channelDrivers NOTIFY channelsChanged)
+    Q_PROPERTY(QString channelDriver READ channelDriver NOTIFY channelsChanged)
 public:
     explicit RemoteClient(QObject* parent = nullptr);
     ~RemoteClient() override;
@@ -35,6 +38,8 @@ public:
     QVariantMap controls() const;
     QVariantList channelSpaces() const { return m_channelSpaces; }
     bool channelsLoading() const { return !m_channelRequest.isEmpty(); }
+    QStringList channelDrivers() const { return m_channelDrivers; }
+    QString channelDriver() const { return m_channelDriver; }
     Q_INVOKABLE void start();
     Q_INVOKABLE void connectTo(const QString& url);
     Q_INVOKABLE void disconnectFromServer();
@@ -45,9 +50,10 @@ public:
     // so dragging a slider stays within the broker's input rate limit.
     Q_INVOKABLE void control(const QString& name, const QVariant& value);
     Q_INVOKABLE void stepVolume(int delta);
-    // Requests the channel list (with current programmes) from the selected target.
-    Q_INVOKABLE void requestChannels();
-    // Tunes to an entry of channelSpaces[].channels.
+    // Requests the channel list (with current programmes) from the selected
+    // target, for `driver` or the BonDriver in use when empty.
+    Q_INVOKABLE void requestChannels(const QString& driver = QString());
+    // Tunes to an entry of channelSpaces[].channels, switching to channelDriver first if needed.
     Q_INVOKABLE void selectChannel(const QVariantMap& channel);
     // Handles hardware volume keys (Qt::Key_VolumeUp/Down/Mute). Returns true
     // when the key is consumed; emits volumeKeyPressed so the UI can show it.
@@ -90,6 +96,8 @@ private:
     QVariantList m_channelSpaces;
     QString m_channelRequest;
     QMap<int, QVariantMap> m_channelPages; // by page "order"
+    QStringList m_channelDrivers, m_pendingDrivers;
+    QString m_channelDriver, m_pendingDriver;
     quint64 m_sequence = 0;
     bool m_ready = false;
     bool m_wanted = false;

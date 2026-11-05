@@ -49,11 +49,21 @@ inline bool integerIn(const QJsonValue& value, double low, double high) {
 // A channel (0.6.0) is identified by its TVTest tuning space and channel-list
 // index, plus the service and stream IDs that must still match when tuning.
 // In state.controls the current channel may report -1 for unknown positions.
+// A BonDriver is named by its file name only (0.7.0); paths are never accepted.
+inline bool validDriver(const QJsonValue& value) {
+    if (!value.isString()) return false;
+    const auto name = value.toString();
+    return !name.isEmpty() && name.size() <= 128 && !name.contains('/') && !name.contains('\\')
+        && !name.contains(':') && name != "." && name != "..";
+}
 inline bool validChannel(const QJsonValue& value, bool allowUnknown) {
     if (!value.isObject()) return false;
     const auto o = value.toObject();
     const double first = allowUnknown ? -1 : 0;
-    return o.size() == 5 && integerIn(o["space"], first, 255) && integerIn(o["index"], first, 9999)
+    // `driver` (0.7.0) is optional: without it the channel belongs to the current BonDriver.
+    const bool hasDriver = o.contains("driver");
+    return o.size() == (hasDriver ? 6 : 5) && (!hasDriver || validDriver(o["driver"]))
+        && integerIn(o["space"], first, 255) && integerIn(o["index"], first, 9999)
         && integerIn(o["serviceId"], 0, 65535) && integerIn(o["networkId"], 0, 65535)
         && integerIn(o["transportStreamId"], 0, 65535);
 }

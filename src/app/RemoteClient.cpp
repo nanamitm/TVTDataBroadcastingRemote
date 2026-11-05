@@ -109,8 +109,9 @@ void RemoteClient::stopConnection() {
     clearChannels();
 }
 void RemoteClient::clearChannels() {
-    if (m_channelSpaces.isEmpty() && m_channelRequest.isEmpty() && m_channelPages.isEmpty()) return;
+    if (m_channelSpaces.isEmpty() && m_channelRequest.isEmpty() && m_channelPages.isEmpty() && m_channelDrivers.isEmpty()) return;
     m_channelSpaces.clear(); m_channelRequest.clear(); m_channelPages.clear();
+    m_channelDrivers.clear(); m_channelDriver.clear(); m_pendingDrivers.clear(); m_pendingDriver.clear();
     emit channelsChanged();
 }
 void RemoteClient::disconnectFromServer() {
@@ -156,10 +157,13 @@ QString RemoteClient::sendCommand(QJsonObject o) {
     o["id"] = id; send(o);
     return id;
 }
-void RemoteClient::requestChannels() {
+void RemoteClient::requestChannels(const QString& driver) {
     if (!controls().contains("channel") || !m_channelRequest.isEmpty()) return;
-    m_channelPages.clear();
-    m_channelRequest = sendCommand(Remote::message("channels"));
+    if (!driver.isEmpty() && !Remote::validDriver(driver)) return;
+    m_channelPages.clear(); m_pendingDrivers.clear(); m_pendingDriver.clear();
+    auto o = Remote::message("channels");
+    if (!driver.isEmpty()) o["driver"] = driver;
+    m_channelRequest = sendCommand(o);
     emit channelsChanged();
 }
 void RemoteClient::selectChannel(const QVariantMap& channel) {
@@ -167,6 +171,8 @@ void RemoteClient::selectChannel(const QVariantMap& channel) {
     QVariantMap value;
     for (const auto* key : {"space", "index", "serviceId", "networkId", "transportStreamId"})
         value[QLatin1String(key)] = channel.value(QLatin1String(key));
+    // The listed BonDriver; the plugin switches to it first when it is not in use.
+    if (!m_channelDriver.isEmpty()) value["driver"] = m_channelDriver;
     control("channel", value);
 }
 void RemoteClient::press(const QString& key) {
@@ -292,6 +298,11 @@ void RemoteClient::received(const QString& text) {
             setStatus(status == "identity_conflict" ? QStringLiteral("操作先識別トークンが重複しています。設定を確認してください")
                 : status == "target_gone" ? QStringLiteral("TVTestの再起動を待っています") : QStringLiteral("操作権を解放しました"));
         }
+    } else if (type == "channelDrivers") {
+        if (m_channelRequest.isEmpty() || o["id"].toString() != m_channelRequest) return;
+        m_pendingDrivers.clear();
+        for (const auto& name : o["drivers"].toArray()) m_pendingDrivers.append(name.toString());
+        m_pendingDriver = o["driver"].toString();
     } else if (type == "channelPage") {
         if (m_channelRequest.isEmpty() || o["id"].toString() != m_channelRequest) return;
         auto& space = m_channelPages[o["order"].toInt()];
@@ -307,7 +318,10 @@ void RemoteClient::received(const QString& text) {
             if (status == "dispatched") {
                 m_channelSpaces.clear();
                 for (const auto& space : std::as_const(m_channelPages)) m_channelSpaces.append(space);
+                // Older plugins send no BonDriver list; the list then is the current one.
+                m_channelDrivers = m_pendingDrivers; m_channelDriver = m_pendingDriver;
             }
+            m_pendingDrivers.clear(); m_pendingDriver.clear();
             m_channelPages.clear();
             emit channelsChanged();
         }

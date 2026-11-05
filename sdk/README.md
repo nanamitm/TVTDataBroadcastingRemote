@@ -23,3 +23,7 @@ TVTDataBroadcastingWV2との連携では、このディレクトリの3つのヘ
 ## チャンネル一覧と選局（0.6.0）
 
 `Win32Bridge::Start` の `ChannelList` コールバック付きオーバーロードで、チューニング空間ごとのチャンネル一覧（`[{"space":0,"name":"…","channels":[…]}]`）を返すと、ブリッジが16 KiB未満のページに分割して送信します。選局は `Control` コールバックに `("channel", {space,index,serviceId,networkId,transportStreamId})` として届きます。状態の `controls.channel` に現在のチャンネルを通知したプラグインだけが、一覧要求と選局を受け取ります。
+
+## BonDriverの切り替え（0.7.0）
+
+`DriverChannelList` コールバック（引数は要求されたBonDriverのファイル名、空なら使用中のもの）で `{"driver","current","drivers":[…],"spaces":[…]}` を返すと、ブリッジがBonDriver一覧（`channelDrivers`）とBonDriver名付きのページを送信します。選局値の `driver` が使用中と異なる場合は、プラグイン側で切り替えてから選局してください。

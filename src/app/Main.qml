@@ -225,8 +225,17 @@ ApplicationWindow {
     // 現在のチャンネルか (一覧の位置はTVTestから分からないため、空間とIDで照合する)
     function isCurrentChannel(channel) {
         const c = window.controls.channel
-        return !!c && c.space === channel.space && c.serviceId === channel.serviceId
+        return !!c && window.listsCurrentDriver() && c.space === channel.space && c.serviceId === channel.serviceId
             && c.networkId === channel.networkId && c.transportStreamId === channel.transportStreamId
+    }
+    // 一覧が使用中のBonDriverのものか (古いプラグインはBonDriverを知らせないので常に真)
+    function listsCurrentDriver() {
+        const current = window.controls.channel ? window.controls.channel.driver : undefined
+        return !current || !remote.channelDriver || current.toLowerCase() === remote.channelDriver.toLowerCase()
+    }
+    // "BonDriver_PX-MLT.dll" → "PX-MLT"
+    function driverLabel(name) {
+        return name.replace(/^BonDriver_/i, "").replace(/\.dll$/i, "")
     }
     function programTime(program) {
         const start = new Date(program.start)
@@ -261,12 +270,18 @@ ApplicationWindow {
             const c = window.controls.channel
             const spaces = remote.channelSpaces
             let index = channelTabs.currentIndex < spaces.length ? channelTabs.currentIndex : 0
-            for (let i = 0; c && i < spaces.length; i++) {
+            for (let i = 0; c && window.listsCurrentDriver() && i < spaces.length; i++) {
                 if (spaces[i].space === c.space) { index = i; break }
             }
             channelTabs.currentIndex = index
-            // タブが画面幅を超える場合も、選択中のタブ全体が見える位置までスクロールする
-            Qt.callLater(() => channelTabs.contentItem.positionViewAtIndex(channelTabs.currentIndex, ListView.Contain))
+            tabScroll.restart()
+        }
+        // タブが画面幅を超える場合も、選択中のタブ全体が見える位置までスクロールする。
+        // 一覧 (BonDriver) が変わるとタブが作り直されるため、配置が終わってから動かす
+        Timer {
+            id: tabScroll
+            interval: 50
+            onTriggered: channelTabs.reveal(channelTabs.currentIndex)
         }
         ColumnLayout {
             id: broadcastContent
@@ -293,7 +308,32 @@ ApplicationWindow {
                 color: "#a9b5c2"
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: "#344657" }
-            Label { text: "チャンネル"; font.bold: true }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                Label { text: "チャンネル"; font.bold: true }
+                // 使っていないBonDriverを選ぶと、その一覧を表示する。局を選んだときに切り替える
+                ComboBox {
+                    id: driverBox
+                    visible: remote.channelDrivers.length > 1
+                    Layout.fillWidth: true
+                    Accessible.name: "BonDriver"
+                    model: remote.channelDrivers
+                    displayText: remote.channelDriver ? window.driverLabel(remote.channelDriver) : ""
+                    currentIndex: remote.channelDrivers.indexOf(remote.channelDriver)
+                    enabled: !remote.channelsLoading
+                    delegate: ItemDelegate {
+                        required property string modelData
+                        required property int index
+                        width: driverBox.width
+                        text: window.driverLabel(modelData)
+                              + (window.controls.channel && window.controls.channel.driver
+                                 && modelData.toLowerCase() === window.controls.channel.driver.toLowerCase() ? "（使用中）" : "")
+                        highlighted: driverBox.highlightedIndex === index
+                    }
+                    onActivated: (index) => remote.requestChannels(remote.channelDrivers[index])
+                }
+            }
             Label {
                 visible: !broadcastDrawer.channelsSupported || remote.channelSpaces.length === 0
                 text: !window.canOperate ? "操作するTVTestを選択してください"
@@ -305,20 +345,53 @@ ApplicationWindow {
                 font.pixelSize: 13
                 color: "#a9b5c2"
             }
-            TabBar {
+            // 放送波のタブ。TabBarは選択中のタブに合わせて内部の表示位置をずらし、先頭のタブが
+            // 欠けることがあるため、横スクロールする行にタブを並べて位置を自分で決める
+            Flickable {
                 id: channelTabs
+                property int currentIndex: 0
                 visible: remote.channelSpaces.length > 0
                 Layout.fillWidth: true
                 // タブの合計幅でレイアウトが広がると左右にはみ出すため、幅はシートに合わせてスクロールさせる
                 Layout.preferredWidth: 0
                 Layout.maximumWidth: broadcastContent.width
-                Material.background: "#1d2936"
-                Repeater {
-                    model: remote.channelSpaces
-                    delegate: TabButton {
-                        required property var modelData
-                        text: modelData.name
-                        width: implicitWidth
+                Layout.preferredHeight: tabRow.height
+                contentWidth: tabRow.width
+                contentHeight: tabRow.height
+                clip: true
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                // 指定したタブ全体が見える位置までスクロールする
+                function reveal(index) {
+                    const item = tabRepeater.itemAt(index)
+                    const maxX = Math.max(0, contentWidth - width)
+                    if (!item || index <= 0) { contentX = 0; return }
+                    if (item.x < contentX) contentX = Math.min(maxX, item.x)
+                    else if (item.x + item.width > contentX + width) contentX = Math.min(maxX, item.x + item.width - width)
+                }
+                Row {
+                    id: tabRow
+                    Repeater {
+                        id: tabRepeater
+                        model: remote.channelSpaces
+                        delegate: TabButton {
+                            id: spaceTab
+                            required property var modelData
+                            required property int index
+                            text: modelData.name
+                            width: implicitWidth
+                            checkable: false
+                            checked: channelTabs.currentIndex === index
+                            onClicked: { channelTabs.currentIndex = index; channelTabs.reveal(index) }
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: 2
+                                color: "#5ec9c1"
+                                visible: spaceTab.checked
+                            }
+                        }
                     }
                 }
             }

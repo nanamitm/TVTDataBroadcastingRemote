@@ -128,3 +128,10 @@ A remote requests the list with the usual command fields (`id`, `sequence`, `tar
 - `program` is the programme on air when the list was built (`start` in Unix epoch milliseconds, `duration` in seconds) and is omitted when EPG data is unavailable. Disabled channels are not listed.
 - The broker forwards `channels` only to agents that advertise `controls.channel` (otherwise `unsupported`) and relays pages only to the requesting connection. IPC uses `{"type":"channels","request":...,"expires":...}`; the agent answers with `channelPage` messages carrying `request`, then `result`.
 - Tuning is a `control` named `channel` whose value has exactly `space`, `index`, `serviceId`, `networkId` and `transportStreamId` (all non-negative integers). The plugin tunes only if the list entry at that position still has the same IDs, so a changed channel file never tunes a different service.
+
+## BonDriver switching (0.7.0)
+
+- `controls.channel` may include `driver`, the BonDriver file name in use (e.g. `BonDriver_PX-MLT.dll`).
+- A `channels` request may include `driver` to list another BonDriver's channels without switching. The agent first sends `{"type":"channelDrivers","request":...,"drivers":[...],"driver":"<listed>","current":"<in use>"}` (the broker relays it with the client's `id`), then pages carrying `driver`, then `result`. Only BonDrivers with channel files are listed.
+- A `channel` control may include `driver`. When it differs from the BonDriver in use, the plugin switches BonDriver first and then tunes; it refuses while recording, and only accepts names it enumerated itself. After switching, the entry is found by its space and IDs if its list position differs.
+- BonDriver names are plain file names (at most 128 characters, no `/`, `\` or `:`); the broker rejects anything else with `invalid_control`.

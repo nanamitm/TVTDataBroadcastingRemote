@@ -142,7 +142,21 @@ void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
         auto page = Remote::message("channelPage");
         page["id"] = m_pending[request].id; page["space"] = o["space"]; page["order"] = o["order"];
         page["spaceName"] = o["spaceName"].toString().left(64); page["channels"] = channels;
+        if (Remote::validDriver(o["driver"])) page["driver"] = o["driver"];
         if (Remote::encode(page).size() <= Remote::MaxMessage) send(m_pending[request].client, page);
+    } else if (type == "channelDrivers") {
+        // The BonDrivers that have channels (0.7.0), sent before the pages.
+        const auto request = o["request"].toString();
+        if (!m_pending.contains(request) || m_pending[request].agent != s) return;
+        const auto drivers = o["drivers"].toArray();
+        if (!o["drivers"].isArray() || drivers.size() > 64) { s->abort(); return; }
+        QJsonArray names;
+        for (const auto& driver : drivers) if (Remote::validDriver(driver)) names.append(driver);
+        auto message = Remote::message("channelDrivers");
+        message["id"] = m_pending[request].id; message["drivers"] = names;
+        message["driver"] = Remote::validDriver(o["driver"]) ? o["driver"].toString() : QString();
+        message["current"] = Remote::validDriver(o["current"]) ? o["current"].toString() : QString();
+        send(m_pending[request].client, message);
     } else if (type != "heartbeat") s->abort();
 }
 void Broker::acceptClients() {
@@ -223,6 +237,9 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
     }
     const bool isControl = type == "control";
     const bool isChannels = type == "channels";
+    if (isChannels && o.contains("driver") && !Remote::validDriver(o["driver"])) {
+        send(s, Remote::result(id, "invalid_control")); return;
+    }
     if (isControl ? !Remote::validControl(o["name"].toString(), o["value"])
         : !isChannels && (!Remote::validKey(o["key"].toString()) || o["action"] != "press")) {
         send(s, Remote::result(id, isControl ? "invalid_control" : "invalid_key")); return;
@@ -246,9 +263,14 @@ void Broker::clientMessage(QWebSocket* s, const QString& text) {
         auto command = Remote::message(isControl ? "control" : isChannels ? "channels" : "key"); command["request"] = request;
         if (isControl) { command["name"] = o["name"]; command["value"] = o["value"]; }
         else if (!isChannels) { command["key"] = o["key"]; command["action"] = "press"; }
+        else if (o.contains("driver")) command["driver"] = o["driver"];
         const auto deadline = std::min(timestamp + 2000, static_cast<qint64>(expires));
         command["expires"] = static_cast<double>(deadline);
-        m_pending.insert(request, Pending{s, it.key(), id, deadline});
+        // Opening another BonDriver or listing every BonDriver's channels can take
+        // seconds once dispatched; wait longer for those replies (dispatch still
+        // has to start before `deadline`).
+        const bool slow = isChannels || (isControl && o["name"] == "channel");
+        m_pending.insert(request, Pending{s, it.key(), id, slow ? timestamp + 10000 : deadline});
         send(it.key(), command); return;
     }
     send(s, Remote::result(id, "target_gone"));

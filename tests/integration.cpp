@@ -26,6 +26,7 @@ class Agent : public QObject {
 public:
     QLocalSocket socket; QByteArray buffer; QString id; QList<QJsonObject> keys, controls; bool acknowledge = true;
     QJsonArray channelPages; int channelRequests = 0; // pages sent for each "channels" request
+    QJsonObject channelDrivers; QList<QJsonObject> channelRequestLog; // BonDriver list sent first when set
     Agent(const QString& pipe, const QString& label, const QString& token = {}, const QJsonValue& advertised = QJsonValue(QJsonValue::Undefined)) {
         connect(&socket, &QLocalSocket::connected, this, [this, label, token, advertised] {
             auto o = Remote::message("register"); o["name"] = label; o["channel"] = "Test";
@@ -44,7 +45,10 @@ public:
                     if (acknowledge) { auto r = Remote::message("result"); r["request"] = o["request"]; r["status"] = "dispatched"; send(r); }
                 }
                 if (o["type"] == "channels") {
-                    ++channelRequests;
+                    ++channelRequests; channelRequestLog.append(o);
+                    if (!channelDrivers.isEmpty()) {
+                        auto drivers = channelDrivers; drivers["v"] = 1; drivers["type"] = "channelDrivers"; drivers["request"] = o["request"]; send(drivers);
+                    }
                     for (const auto& value : std::as_const(channelPages)) {
                         auto page = value.toObject(); page["v"] = 1; page["type"] = "channelPage"; page["request"] = o["request"]; send(page);
                     }
@@ -198,6 +202,47 @@ private slots:
         QTRY_VERIFY(raw.has("result", "invalid_control"));
         // Pages for a request owned by another client are not relayed to others.
         QCOMPARE([&] { int n = 0; for (const auto& o : raw.messages) n += o["type"] == "channelPage"; return n; }(), 0);
+    }
+    void bonDriverListIsRelayedAndTunesWithDriver() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        const QJsonObject current{{"space", 0}, {"index", -1}, {"serviceId", 1024}, {"networkId", 32736},
+            {"transportStreamId", 32736}, {"driver", "BonDriver_PX-MLT.dll"}};
+        Agent agent(pipe, "Drivers", "drivers", QJsonObject{{"channel", current}});
+        agent.channelDrivers = QJsonObject{{"drivers", QJsonArray{"BonDriver_PX-MLT.dll", "BonDriver_TBS6812.dll", "..\\evil.dll"}},
+            {"driver", "BonDriver_TBS6812.dll"}, {"current", "BonDriver_PX-MLT.dll"}};
+        agent.channelPages = {QJsonObject{{"space", 0}, {"order", 0}, {"spaceName", "BS"}, {"driver", "BonDriver_TBS6812.dll"},
+            {"channels", QJsonArray{QJsonObject{{"space", 0}, {"index", 3}, {"remoteControlKey", 0}, {"name", "BS1"},
+                {"serviceId", 101}, {"networkId", 4}, {"transportStreamId", 16625}}}}}};
+        QTRY_VERIFY(!agent.id.isEmpty());
+        RemoteClient app; app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 1);
+        app.claim(agent.id); QTRY_COMPARE(app.selected(), agent.id);
+        QCOMPARE(app.controls().value("channel").toMap().value("driver").toString(), QString("BonDriver_PX-MLT.dll"));
+        // The requested BonDriver reaches the agent; paths are filtered out of the list.
+        app.requestChannels("BonDriver_TBS6812.dll"); QTRY_VERIFY(!app.channelsLoading());
+        QCOMPARE(agent.channelRequestLog.last()["driver"].toString(), QString("BonDriver_TBS6812.dll"));
+        QCOMPARE(app.channelDrivers(), QStringList({"BonDriver_PX-MLT.dll", "BonDriver_TBS6812.dll"}));
+        QCOMPARE(app.channelDriver(), QString("BonDriver_TBS6812.dll"));
+        // Tuning from that list carries the BonDriver to switch to.
+        app.selectChannel(app.channelSpaces()[0].toMap().value("channels").toList()[0].toMap());
+        QTRY_COMPARE(agent.controls.size(), 1);
+        const auto value = agent.controls[0]["value"].toObject();
+        QCOMPARE(value["driver"].toString(), QString("BonDriver_TBS6812.dll")); QCOMPARE(value.size(), 6);
+        // A path as BonDriver name is rejected for lists and tuning alike.
+        app.requestChannels("C:\\evil\\BonDriver_X.dll"); QVERIFY(!app.channelsLoading());
+        Client raw(b.port()); QTRY_VERIFY(raw.has("targets"));
+        app.release(); QTRY_VERIFY(app.selected().isEmpty());
+        // Wait for the broker to process the release before another client claims.
+        QTRY_VERIFY(!app.targets().isEmpty() && !app.targets()[0].toMap()["busy"].toBool());
+        raw.claim(agent.id); QTRY_VERIFY(raw.has("selection", "claimed"));
+        auto request = Remote::message("channels"); request["id"] = "d1"; request["sequence"] = 1; request["target"] = agent.id;
+        request["driver"] = "..\\BonDriver_X.dll"; request["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500);
+        raw.send(request); QTRY_VERIFY(raw.has("result", "invalid_control"));
+        auto tune = Remote::message("control"); tune["id"] = "d2"; tune["sequence"] = 2; tune["target"] = agent.id; tune["name"] = "channel";
+        tune["value"] = QJsonObject{{"space", 0}, {"index", 0}, {"serviceId", 1}, {"networkId", 1}, {"transportStreamId", 1}, {"driver", "C:/x.dll"}};
+        tune["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500); raw.send(tune);
+        QTRY_COMPARE([&] { int n = 0; for (const auto& o : raw.messages) n += o["status"] == "invalid_control"; return n; }(), 2);
+        QCOMPARE(agent.channelRequestLog.size(), 1); QCOMPARE(agent.controls.size(), 1);
     }
     void stableIdentitySurvivesPluginRestartAndColdStart() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
@@ -664,6 +709,13 @@ private slots:
             if (page["space"] == 1) { QCOMPARE(page["order"].get<int>(), 1); bsCount += page["channels"].size(); }
         }
         QCOMPARE(bsCount, std::size_t(150));
+        // A BonDriver-aware list is preceded by the BonDriver names, and pages carry the listed one.
+        const auto reply = TvtRemote::Win32Bridge::ChannelReply({{"driver", "BonDriver_B.dll"}, {"current", "BonDriver_A.dll"},
+            {"drivers", {"BonDriver_A.dll", "BonDriver_B.dll"}}, {"spaces", makeSpaces()}});
+        QCOMPARE(reply.front()["type"].get<std::string>(), std::string("channelDrivers"));
+        QCOMPARE(reply.front()["drivers"].size(), std::size_t(2));
+        QCOMPARE(reply.size(), pages.size() + 1);
+        for (std::size_t i = 1; i < reply.size(); ++i) QCOMPARE(reply[i]["driver"].get<std::string>(), std::string("BonDriver_B.dll"));
 
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         TvtRemote::Win32Bridge bridge;
