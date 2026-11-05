@@ -21,6 +21,23 @@ ApplicationWindow {
     }
     readonly property var controls: remote.controls
     readonly property bool canOperate: remote.connected && remote.selected.length > 0
+    // 録画の経過時間 (サーバーの時計で録画開始時刻からの差を1秒ごとに更新する)
+    property string recordElapsed: "録画中"
+    function updateRecordElapsed() {
+        const start = window.controls.recordStart
+        const now = remote.serverNow()
+        if (start === undefined || now <= 0) { recordElapsed = "録画中"; return }
+        const total = Math.max(0, Math.floor((now - start) / 1000))
+        const pad = (n) => (n < 10 ? "0" : "") + n
+        recordElapsed = Math.floor(total / 3600) + ":" + pad(Math.floor(total / 60) % 60) + ":" + pad(total % 60)
+    }
+    Timer {
+        interval: 1000
+        repeat: true
+        triggeredOnStart: true
+        running: window.controls.record === true
+        onTriggered: window.updateRecordElapsed()
+    }
 
     component RemoteButton: Button {
         property string remoteKey
@@ -97,6 +114,40 @@ ApplicationWindow {
             anchors.leftMargin: 16
             anchors.rightMargin: 12
             Label { text: "TVTest Remote"; font.pixelSize: 21; Layout.fillWidth: true }
+            // 全画面の切替。押し間違えると困る録画ボタンから離して置く
+            ToolButton {
+                id: fullscreenButton
+                readonly property bool on: window.controls.fullscreen === true
+                visible: window.canOperate && window.controls.fullscreen !== undefined
+                implicitWidth: 48
+                implicitHeight: 48
+                Accessible.name: on ? "全画面表示を解除" : "全画面表示"
+                ToolTip.text: Accessible.name
+                ToolTip.visible: hovered
+                onClicked: remote.control("fullscreen", !on)
+                background: Rectangle {
+                    anchors.centerIn: parent
+                    width: 40; height: 40; radius: 20
+                    color: fullscreenButton.on ? "#5ec9c1" : "transparent"
+                }
+                // 四隅のかぎ形で全画面を表す (端末のフォントや絵文字に依存しない)
+                contentItem: Item {
+                    implicitWidth: 24
+                    implicitHeight: 24
+                    Repeater {
+                        model: 4
+                        delegate: Item {
+                            required property int index
+                            readonly property color ink: fullscreenButton.on ? "#11202b" : "#edf4f8"
+                            width: 8; height: 8
+                            x: (index % 2 === 0) ? 4 : parent.width - width - 4
+                            y: (index < 2) ? 4 : parent.height - height - 4
+                            Rectangle { width: parent.width; height: 2; color: parent.ink; y: index < 2 ? 0 : parent.height - 2 }
+                            Rectangle { width: 2; height: parent.height; color: parent.ink; x: index % 2 === 0 ? 0 : parent.width - 2 }
+                        }
+                    }
+                }
+            }
             ToolButton {
                 id: settingsButton
                 implicitWidth: 48
@@ -149,19 +200,38 @@ ApplicationWindow {
         ColumnLayout {
             width: parent.width
             spacing: 10
-            Label {
-                text: window.selectedTarget && !remote.status.startsWith("操作結果:")
-                      && !remote.status.startsWith("接続エラー:")
-                      ? window.selectedTarget.name + " / " + window.selectedTarget.channel
-                      : remote.status
-                color: remote.connected ? "#88d5cc" : "#dfbc9c"
-                font.pixelSize: 14
-                elide: Text.ElideRight
+            // 操作中のTVTestと、そのTVTestへの操作 (全画面・録画)
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 8
-                Layout.bottomMargin: 2
+                Layout.rightMargin: 12
+                Layout.topMargin: 4
+                spacing: 6
+                Label {
+                    text: window.selectedTarget && !remote.status.startsWith("操作結果:")
+                          && !remote.status.startsWith("接続エラー:")
+                          ? window.selectedTarget.name + " / " + window.selectedTarget.channel
+                          : remote.status
+                    color: remote.connected ? "#88d5cc" : "#dfbc9c"
+                    font.pixelSize: 14
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Button {
+                    id: recordButton
+                    readonly property bool recording: window.controls.record === true
+                    visible: window.canOperate && window.controls.record !== undefined
+                    text: recording ? "● " + window.recordElapsed : "● 録画"
+                    Accessible.name: recording ? "録画を停止" : "録画を開始"
+                    font.pixelSize: 13
+                    font.bold: recording
+                    flat: !recording
+                    Material.background: recording ? "#b3343f" : "transparent"
+                    Material.foreground: recording ? "#ffffff" : "#ff8a8a"
+                    Layout.preferredHeight: 40
+                    // 開始はすぐ行い、停止は取り消せないので確認してから行う
+                    onClicked: recording ? stopRecordDialog.open() : remote.control("record", true)
+                }
             }
             GridLayout {
                 columns: 3
@@ -562,6 +632,29 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
         }
+    }
+
+    // 録画の停止は取り消せないため確認する
+    Dialog {
+        id: stopRecordDialog
+        anchors.centerIn: parent
+        width: Math.min(window.width - 48, 360)
+        modal: true
+        focus: true
+        title: "録画を停止しますか？"
+        background: Rectangle { color: "#1d2936"; radius: 16 }
+        Overlay.modal: Rectangle { color: "#b3000000" }
+        contentItem: Label {
+            text: (window.selectedTarget ? window.selectedTarget.name + " の" : "") + "録画を停止します（" + window.recordElapsed + "）。"
+            wrapMode: Text.Wrap
+            color: "#edf4f8"
+        }
+        footer: DialogButtonBox {
+            background: Rectangle { color: "#1d2936"; radius: 16 }
+            Button { text: "キャンセル"; flat: true; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Button { text: "停止"; highlighted: true; Material.accent: "#e05661"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+        }
+        onAccepted: remote.control("record", false)
     }
 
     Dialog {

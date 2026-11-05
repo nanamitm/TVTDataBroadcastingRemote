@@ -203,6 +203,28 @@ private slots:
         // Pages for a request owned by another client are not relayed to others.
         QCOMPARE([&] { int n = 0; for (const auto& o : raw.messages) n += o["type"] == "channelPage"; return n; }(), 0);
     }
+    void fullscreenAndRecordingControls() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent agent(pipe, "Recorder", "recorder", QJsonObject{{"fullscreen", false}, {"record", true},
+            {"recordStart", 1790000000000.0}});
+        QTRY_VERIFY(!agent.id.isEmpty());
+        RemoteClient app; app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_VERIFY(app.connected()); QTRY_COMPARE(app.targets().size(), 1);
+        app.claim(agent.id); QTRY_COMPARE(app.selected(), agent.id);
+        QCOMPARE(app.controls().value("recordStart").toDouble(), 1790000000000.0);
+        QVERIFY(app.serverNow() > 1700000000000.0);
+        app.control("fullscreen", true); app.control("record", false);
+        QTRY_COMPARE(agent.controls.size(), 2);
+        QCOMPARE(agent.controls[0]["name"].toString(), QString("fullscreen")); QCOMPARE(agent.controls[0]["value"], QJsonValue(true));
+        QCOMPARE(agent.controls[1]["name"].toString(), QString("record")); QCOMPARE(agent.controls[1]["value"], QJsonValue(false));
+        // recordStart is reported state only and cannot be requested.
+        Client raw(b.port()); QTRY_VERIFY(raw.has("targets"));
+        app.release(); QTRY_VERIFY(!app.targets().isEmpty() && !app.targets()[0].toMap()["busy"].toBool());
+        raw.claim(agent.id); QTRY_VERIFY(raw.has("selection", "claimed"));
+        auto bad = Remote::message("control"); bad["id"] = "r1"; bad["sequence"] = 1; bad["target"] = agent.id;
+        bad["name"] = "recordStart"; bad["value"] = 0; bad["expires"] = static_cast<double>(QDateTime::currentMSecsSinceEpoch() + 1500);
+        raw.send(bad); QTRY_VERIFY(raw.has("result", "invalid_control")); QCOMPARE(agent.controls.size(), 2);
+    }
     void bonDriverListIsRelayedAndTunesWithDriver() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         const QJsonObject current{{"space", 0}, {"index", -1}, {"serviceId", 1024}, {"networkId", 32736},

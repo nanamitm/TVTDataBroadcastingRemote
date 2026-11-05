@@ -50,6 +50,10 @@ public:
     // so dragging a slider stays within the broker's input rate limit.
     Q_INVOKABLE void control(const QString& name, const QVariant& value);
     Q_INVOKABLE void stepVolume(int delta);
+    // Current time on the server clock (Unix epoch ms), for elapsed recording time.
+    Q_INVOKABLE double serverNow() const {
+        return m_serverClock.isValid() ? static_cast<double>(m_serverTime + m_serverClock.elapsed()) : 0;
+    }
     // Requests the channel list (with current programmes) from the selected
     // target, for `driver` or the BonDriver in use when empty.
     Q_INVOKABLE void requestChannels(const QString& driver = QString());

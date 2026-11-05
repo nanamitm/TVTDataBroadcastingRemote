@@ -135,3 +135,12 @@ A remote requests the list with the usual command fields (`id`, `sequence`, `tar
 - A `channels` request may include `driver` to list another BonDriver's channels without switching. The agent first sends `{"type":"channelDrivers","request":...,"drivers":[...],"driver":"<listed>","current":"<in use>"}` (the broker relays it with the client's `id`), then pages carrying `driver`, then `result`. Only BonDrivers with channel files are listed.
 - A `channel` control may include `driver`. When it differs from the BonDriver in use, the plugin switches BonDriver first and then tunes; it refuses while recording, and only accepts names it enumerated itself. After switching, the entry is found by its space and IDs if its list position differs.
 - BonDriver names are plain file names (at most 128 characters, no `/`, `\` or `:`); the broker rejects anything else with `invalid_control`.
+
+## Full screen and recording (0.8.0)
+
+| `name` | `value` | Effect |
+|---|---|---|
+| `fullscreen` | boolean | TVTest full screen on/off |
+| `record` | boolean | Start (true) or stop (false) recording; a request matching the current state succeeds without action |
+
+Agents report both in `controls`, plus `recordStart` (Unix epoch milliseconds, UTC) while recording. `recordStart` is state only; requesting it returns `invalid_control`. The app shows elapsed time from `recordStart` using the server clock, so the state does not change every second. The app asks for confirmation before stopping a recording.

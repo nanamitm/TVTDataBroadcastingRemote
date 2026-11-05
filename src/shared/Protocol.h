@@ -69,7 +69,10 @@ inline bool validChannel(const QJsonValue& value, bool allowUnknown) {
 }
 // `state` is true for values reported by an agent, false for requests.
 inline bool validControl(const QString& name, const QJsonValue& value, bool state = false) {
-    if (name == "caption" || name == "mute") return value.isBool();
+    // fullscreen/record (0.8.0) toggle TVTest's full screen and recording.
+    if (name == "caption" || name == "mute" || name == "fullscreen" || name == "record") return value.isBool();
+    // Recording start time in Unix epoch milliseconds; reported only, never requested.
+    if (name == "recordStart") return state && integerIn(value, 0, 9007199254740991.0);
     if (name == "volume") return integerIn(value, 0, MaxVolume);
     if (name == "channel") return validChannel(value, state);
     return false;
