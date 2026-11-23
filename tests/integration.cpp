@@ -156,6 +156,28 @@ private slots:
         Agent malformed(pipe, "Malformed", "malformed", QJsonValue(5));
         QTRY_COMPARE(malformed.socket.state(), QLocalSocket::UnconnectedState);
     }
+    void volumeQueueDoesNotCrossTargets() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "A", "a", QJsonObject{{"volume", 10}}), other(pipe, "B", "b", QJsonObject{{"volume", 80}});
+        QTRY_VERIFY(!a.id.isEmpty() && !other.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_COMPARE(c.targets().size(), 2); c.claim(a.id); QTRY_COMPARE(c.selected(), a.id);
+        c.control("volume", 15); c.control("volume", 20);
+        c.claim(other.id); QTRY_COMPARE(c.selected(), other.id);
+        QTest::qWait(250);
+        QVERIFY2(other.controls.isEmpty(), "A's queued volume was delivered to B");
+    }
+    void volumeStepsUseSelectedTarget() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "A", "a", QJsonObject{{"volume", 10}}), other(pipe, "B", "b", QJsonObject{{"volume", 80}});
+        QTRY_VERIFY(!a.id.isEmpty() && !other.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_COMPARE(c.targets().size(), 2); c.claim(a.id); QTRY_COMPARE(c.selected(), a.id);
+        c.control("volume", 15); QTest::qWait(200);
+        c.claim(other.id); QTRY_COMPARE(c.selected(), other.id);
+        c.stepVolume(5); QTRY_COMPARE(other.controls.size(), 1);
+        QCOMPARE(other.controls[0]["value"].toInt(), 85);
+    }
     void channelListIsPagedAndChannelsAreSelected() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         auto channel = [](int space, int index, int sid, const QString& name, bool program) {
