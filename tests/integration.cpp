@@ -424,6 +424,22 @@ private slots:
         app.press("enter"); QTRY_COMPARE(agents.back()->keys.size(), 1);
         // Claim broadcasts another large snapshot; ownership must be retained.
         QCOMPARE(app.selected(), agents.back()->id); QVERIFY(app.connected());
+        // A burst of agent updates queues several large snapshots before any is
+        // flushed; that backlog must not be treated as a stalled remote.
+        const int burst = 65536 / bytes.size() + 2;
+        QVERIFY(burst * (bytes.size() + 14) < Remote::MaxClientBacklog);
+        QByteArray updates;
+        for (int i = 0; i < burst; ++i) {
+            auto state = Remote::message("state"); state["name"] = label; state["channel"] = label;
+            state["targetToken"] = QString(62, 't') + QString::number(15);
+            state["controls"] = controls; state["mode"] = QString(20, QChar(0x3042));
+            state["enabled"] = true; state["pid"] = i;
+            updates += Remote::encode(state) + '\n';
+        }
+        agents.back()->socket.write(updates); agents.back()->socket.flush();
+        QTest::qWait(300);
+        QVERIFY(app.connected()); QCOMPARE(app.selected(), agents.back()->id);
+        QCOMPARE(app.targets().size(), 16);
         agents.back()->socket.abort(); QTRY_COMPARE(app.targets().size(), 15);
         QVERIFY(app.selected().isEmpty()); QVERIFY(app.connected());
     }
@@ -449,6 +465,28 @@ private slots:
         QLocalSocket rogue; rogue.connectToServer(pipe); QTRY_COMPARE(rogue.state(), QLocalSocket::ConnectedState);
         rogue.write(QByteArray(Remote::MaxMessage + 10, 'x')); rogue.flush();
         QTRY_COMPARE(rogue.state(), QLocalSocket::UnconnectedState);
+    }
+    void ipcAcceptsObjectsUpToMaxMessage() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        auto sized = [](int size) {
+            auto o = Remote::message("register"); o["name"] = "limit"; o["padding"] = QString();
+            const auto base = Remote::encode(o).size();
+            o["padding"] = QString(size - base, 'x');
+            const auto bytes = Remote::encode(o); return bytes;
+        };
+        const auto exact = sized(Remote::MaxMessage); QCOMPARE(exact.size(), Remote::MaxMessage);
+        // The whole object arrives before its LF, as a pipe may split the write.
+        QLocalSocket edge; edge.connectToServer(pipe); QTRY_COMPARE(edge.state(), QLocalSocket::ConnectedState);
+        edge.write(exact); edge.flush(); QTest::qWait(100);
+        QCOMPARE(edge.state(), QLocalSocket::ConnectedState);
+        edge.write("\n"); edge.flush();
+        QTRY_VERIFY(edge.bytesAvailable() > 0 || edge.state() != QLocalSocket::ConnectedState);
+        QCOMPARE(edge.state(), QLocalSocket::ConnectedState);
+        QJsonObject reply; QVERIFY(Remote::decode(edge.readLine().trimmed(), reply));
+        QCOMPARE(reply["type"].toString(), QString("registered"));
+        QLocalSocket over; over.connectToServer(pipe); QTRY_COMPARE(over.state(), QLocalSocket::ConnectedState);
+        over.write(sized(Remote::MaxMessage + 1)); over.flush();
+        QTRY_COMPARE(over.state(), QLocalSocket::UnconnectedState);
     }
     void fragmentedRegistrationAndTimeout() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));

@@ -60,7 +60,7 @@ Broker::~Broker() {
 }
 void Broker::send(QWebSocket* s, const QJsonObject& o) {
     if (!s || s->state() != QAbstractSocket::ConnectedState) return;
-    if (s->bytesToWrite() > 65536) {
+    if (s->bytesToWrite() > Remote::MaxClientBacklog) {
         QMetaObject::invokeMethod(s, &QWebSocket::abort, Qt::QueuedConnection); return;
     }
     const auto bytes = Remote::encode(o);
@@ -109,7 +109,8 @@ void Broker::agentRead(QLocalSocket* s) {
         agentMessage(s, o);
         if (s->state() != QLocalSocket::ConnectedState) return;
     }
-    if (buffer.size() >= Remote::MaxMessage) s->abort();
+    // An unterminated line may still be a full MaxMessage-byte object awaiting its LF.
+    if (buffer.size() > Remote::MaxMessage) s->abort();
 }
 void Broker::agentMessage(QLocalSocket* s, const QJsonObject& o) {
     auto& a = m_agents[s];
