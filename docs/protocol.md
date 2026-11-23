@@ -2,9 +2,9 @@
 
 ## Transport
 
-- Remote: `ws://host:port`, one UTF-8 JSON object per WebSocket text message, maximum 16,384 bytes. No authentication, connection code, certificate, TLS, or pairing step.
+- Remote: `ws://host:port`, one UTF-8 JSON object per WebSocket text message. Commands and ordinary replies have a 16,384-byte maximum; server `targets` snapshots have a 65,536-byte maximum to include all 16 agents without truncating their metadata. No authentication, connection code, certificate, TLS, or pairing step.
 - Every object has `"v":1` and a string `type`. Binary frames and malformed messages are rejected. Browser and native WebSocket clients use the same protocol.
-- IPC: one compact UTF-8 JSON object per LF-terminated line. Windows pipe: `\\.\pipe\TVTDataBroadcastingRemote-v1`. The existing current-user Windows pipe ACL is unchanged.
+- IPC: one compact UTF-8 JSON object per LF-terminated line, maximum 16,384 bytes per JSON object. Windows pipe: `\\.\pipe\TVTDataBroadcastingRemote-v1`. The existing current-user Windows pipe ACL is unchanged.
 - A lock serializes brokers for a given IPC name because Windows permits multiple servers on the same named pipe.
 - The broker assigns a UUID to each registered agent connection. IDs change after reconnect; PIDs/labels are informational.
 - Agent registration must finish within 5 seconds. Peers expire after 15 seconds without liveness. Broker pings and agent heartbeats keep idle connections alive.
@@ -21,6 +21,8 @@ After the WebSocket handshake, the server immediately sends `ready`, followed by
 `serverTime` is Unix epoch milliseconds. The app records it with a monotonic timer to expire input after 1.5 seconds without depending on the phone's clock. App pings detect stalled connections after about 6 seconds.
 
 The target order is unspecified. Use IDs for current-session command routing and tokens for persistent identity; render labels as text. `busy` means a connection owns that target, possibly the current connection. Request another list with `{"v":1,"type":"list"}`.
+
+Snapshots retain the same message format and are applied as a complete list. Remotes must allow up to 65,536 bytes at both WebSocket frame/message and JSON decoding layers, while accepting replies other than `targets` only up to 16,384 bytes. Older remotes with a uniform 16,384-byte limit need updating to receive larger snapshots; they can still receive smaller lists.
 
 ## Operation ownership
 

@@ -63,7 +63,12 @@ void Broker::send(QWebSocket* s, const QJsonObject& o) {
     if (s->bytesToWrite() > 65536) {
         QMetaObject::invokeMethod(s, &QWebSocket::abort, Qt::QueuedConnection); return;
     }
-    s->sendTextMessage(QString::fromUtf8(Remote::encode(o)));
+    const auto bytes = Remote::encode(o);
+    const auto limit = o["type"] == "targets" ? Remote::MaxTargetListMessage : Remote::MaxMessage;
+    if (bytes.size() > limit) {
+        QMetaObject::invokeMethod(s, &QWebSocket::abort, Qt::QueuedConnection); return;
+    }
+    s->sendTextMessage(QString::fromUtf8(bytes));
 }
 void Broker::send(QLocalSocket* s, const QJsonObject& o) {
     if (!s || s->state() != QLocalSocket::ConnectedState) return;

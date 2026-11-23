@@ -7,6 +7,8 @@
 namespace Remote {
 inline constexpr int Version = 1;
 inline constexpr int MaxMessage = 16384;
+// Only server snapshots may contain up to 16 agents' metadata at once.
+inline constexpr int MaxTargetListMessage = 65536;
 inline const QString PipeName = QStringLiteral("TVTDataBroadcastingRemote-v1");
 inline QJsonObject message(const char* type) {
     return {{"v", Version}, {"type", QLatin1String(type)}};
@@ -14,13 +16,17 @@ inline QJsonObject message(const char* type) {
 inline QByteArray encode(const QJsonObject& object) {
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
-inline bool decode(const QByteArray& bytes, QJsonObject& object) {
-    if (bytes.size() > MaxMessage) return false;
+inline bool decode(const QByteArray& bytes, QJsonObject& object, int maxBytes = MaxMessage) {
+    if (bytes.size() > maxBytes) return false;
     QJsonParseError error;
     const auto doc = QJsonDocument::fromJson(bytes, &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
     object = doc.object();
     return object.value("v").toInt(-1) == Version && object.value("type").isString();
+}
+inline bool decodeServerMessage(const QByteArray& bytes, QJsonObject& object) {
+    return decode(bytes, object, MaxTargetListMessage)
+        && (bytes.size() <= MaxMessage || object.value("type") == "targets");
 }
 inline bool validTargetToken(const QString& token) {
     if (token.size() > 64) return false;
