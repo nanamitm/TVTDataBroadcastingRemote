@@ -75,6 +75,7 @@ private:
     void sendVolume(int volume);
     void received(const QString& text);
     void setStatus(const QString& text);
+    void setSelected(const QString& target);
     void stopConnection();
     void openConnection();
     void restoreSelection();

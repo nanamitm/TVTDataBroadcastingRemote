@@ -50,7 +50,7 @@ RemoteClient::RemoteClient(QObject* parent) : QObject(parent) {
     });
     connect(&m_socket, &QWebSocket::textMessageReceived, this, &RemoteClient::received);
     connect(&m_socket, &QWebSocket::disconnected, this, [this] {
-        m_connectTimeout.stop(); m_watchdog.stop(); m_ready = false; m_selected.clear(); m_targets.clear();
+        m_connectTimeout.stop(); m_watchdog.stop(); m_ready = false; setSelected({}); m_targets.clear();
         if (m_socket.closeCode() == QWebSocketProtocol::CloseCodePolicyViolated) {
             m_wanted = false; m_userDisconnected = true;
         }
@@ -85,6 +85,14 @@ void RemoteClient::setAutoConnect(bool enabled) {
     if (enabled && m_started && m_active && !m_wanted && hasSavedConnection()) connectTo(savedUrl());
 }
 void RemoteClient::setStatus(const QString& text) { m_status = text; emit changed(); }
+void RemoteClient::setSelected(const QString& target) {
+    if (m_selected == target) return;
+    m_selected = target;
+    // Coalesced input and step baselines belong to the previous target only.
+    m_volumeThrottle.stop(); m_pendingVolume = -1; m_requestedVolume = -1;
+    m_volumeRequestedAt.invalidate(); m_volumeKeyRepeat.invalidate();
+    clearChannels();
+}
 void RemoteClient::connectTo(const QString& url) {
     m_started = true; m_userDisconnected = true; stopConnection();
     QUrl parsed(url.trimmed());
@@ -104,7 +112,7 @@ void RemoteClient::connectTo(const QString& url) {
 }
 void RemoteClient::stopConnection() {
     m_wanted = false; m_reconnect.stop(); m_watchdog.stop(); m_connectTimeout.stop(); m_socket.abort();
-    m_ready = false; m_selected.clear(); m_targets.clear(); m_restorePending.clear();
+    m_ready = false; setSelected({}); m_targets.clear(); m_restorePending.clear();
     m_volumeThrottle.stop(); m_pendingVolume = -1; m_requestedVolume = -1;
     clearChannels();
 }
@@ -145,7 +153,7 @@ void RemoteClient::claim(const QString& target) {
 void RemoteClient::release() {
     m_lastTarget.clear(); m_lastToken.clear(); m_restorePending.clear();
     QSettings settings; settings.remove("targetId"); settings.remove("targetToken"); settings.remove("targetUrl");
-    m_selected.clear(); clearChannels(); emit changed();
+    setSelected({}); clearChannels(); emit changed();
     if (m_ready) send(Remote::message("release"));
 }
 QString RemoteClient::sendCommand(QJsonObject o) {
@@ -272,13 +280,12 @@ void RemoteClient::received(const QString& text) {
             const auto token = t.toMap()["targetToken"].toString();
             if (token != m_lastToken) { m_lastToken = token; QSettings().setValue("targetToken", token); }
         }
-        if (!found) { m_selected.clear(); clearChannels(); }
+        if (!found) { setSelected({}); clearChannels(); }
         emit changed();
         restoreSelection();
     } else if (type == "selection") {
         const auto status = o["status"].toString();
-        if (m_selected != o["target"].toString()) clearChannels();
-        m_selected = o["target"].toString();
+        setSelected(o["target"].toString());
         if (status == "claimed") {
             m_lastTarget = m_selected; m_lastToken.clear();
             for (const auto& t : m_targets) if (t.toMap()["id"].toString() == m_selected)
@@ -288,7 +295,7 @@ void RemoteClient::received(const QString& text) {
         }
         else if (status == "busy") setStatus(QStringLiteral("別のリモコンが操作中です"));
         else {
-            m_selected.clear();
+            setSelected({});
             if (status == "target_gone" && !m_lastToken.isEmpty()) m_restorePending = m_lastTarget;
             if (status == "identity_conflict") m_restorePending = m_lastTarget;
             if (status == "released") {
