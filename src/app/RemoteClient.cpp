@@ -41,8 +41,8 @@ RemoteClient::RemoteClient(QObject* parent) : QObject(parent) {
         m_socket.ping();
     });
     connect(&m_socket, &QWebSocket::pong, this, [this] { m_alive.restart(); });
-    m_socket.setMaxAllowedIncomingMessageSize(Remote::MaxMessage);
-    m_socket.setMaxAllowedIncomingFrameSize(Remote::MaxMessage);
+    m_socket.setMaxAllowedIncomingMessageSize(Remote::MaxTargetListMessage);
+    m_socket.setMaxAllowedIncomingFrameSize(Remote::MaxTargetListMessage);
     connect(&m_reconnect, &QTimer::timeout, this, &RemoteClient::openConnection);
     connect(&m_socket, &QWebSocket::connected, this, [this] {
         m_alive.start(); m_watchdog.start(); m_sequence = 0;
@@ -262,7 +262,7 @@ void RemoteClient::restoreSelection() {
 }
 void RemoteClient::received(const QString& text) {
     QJsonObject o;
-    if (!Remote::decode(text.toUtf8(), o)) { disconnectFromServer(); setStatus(QStringLiteral("通信仕様が一致しません")); return; }
+    if (!Remote::decodeServerMessage(text.toUtf8(), o)) { disconnectFromServer(); setStatus(QStringLiteral("通信仕様が一致しません")); return; }
     const auto type = o["type"].toString();
     if (type == "ready") {
         const auto serverTime = o["serverTime"].toDouble();

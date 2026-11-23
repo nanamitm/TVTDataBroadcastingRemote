@@ -13,6 +13,7 @@
 #include <QTcpServer>
 #include <QTest>
 #include <QUuid>
+#include <vector>
 #ifdef Q_OS_WIN
 #include <nlohmann/json.hpp>
 #include "Win32RemoteBridge.h"
@@ -65,7 +66,7 @@ public:
     QWebSocket socket; QList<QJsonObject> messages;
     Client(quint16 port) {
         connect(&socket, &QWebSocket::textMessageReceived, this, [this](const QString& text) {
-            QJsonObject o; if (Remote::decode(text.toUtf8(), o)) messages.append(o);
+            QJsonObject o; if (Remote::decodeServerMessage(text.toUtf8(), o)) messages.append(o);
         });
         socket.open(QUrl(QString("ws://127.0.0.1:%1").arg(port)));
     }
@@ -385,6 +386,61 @@ private slots:
         second.messages.clear(); second.claim(other.id); QTRY_VERIFY(second.has("selection", "claimed"));
         second.key(other.id, 3, "green"); QTRY_COMPARE(other.keys.size(), 1);
         QCOMPARE(other.keys[0]["key"].toString(), QString("green"));
+    }
+    void largeTargetSnapshotKeepsAllAgentsAndSelection() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Client raw(b.port()); QTRY_VERIFY(raw.has("targets"));
+        std::vector<std::unique_ptr<Agent>> agents;
+        const QString label(100, QChar(0x3042));
+        const QJsonObject channel{{"space", 255}, {"index", 9999}, {"serviceId", 65535},
+            {"networkId", 65535}, {"transportStreamId", 65535}, {"driver", QString(128, QChar(0x3042))}};
+        const QJsonObject controls{{"channel", channel}, {"volume", 100}, {"caption", true},
+            {"mute", true}, {"fullscreen", true}, {"record", true}, {"recordStart", 9007199254740991.0}};
+        for (int i = 0; i < 16; ++i) {
+            const auto token = QString(62, 't') + QString::number(i);
+            auto agent = std::make_unique<Agent>(pipe, label, token, controls);
+            QTRY_VERIFY(!agent->id.isEmpty());
+            auto state = Remote::message("state"); state["name"] = label; state["channel"] = label;
+            state["targetToken"] = token; state["controls"] = controls;
+            state["mode"] = QString(20, QChar(0x3042)); state["enabled"] = true; state["pid"] = 2147483647;
+            agent->send(state); agents.push_back(std::move(agent));
+        }
+        auto completeSnapshot = [&] {
+            for (auto it = raw.messages.crbegin(); it != raw.messages.crend(); ++it) if ((*it)["type"] == "targets") {
+                const auto targets = (*it)["targets"].toArray();
+                if (targets.size() != 16) return QJsonObject{};
+                for (const auto& t : targets) if (t.toObject()["channel"] != label) return QJsonObject{};
+                return *it;
+            }
+            return QJsonObject{};
+        };
+        QTRY_VERIFY(!completeSnapshot().isEmpty());
+        const auto bytes = Remote::encode(completeSnapshot());
+        QVERIFY(bytes.size() > Remote::MaxMessage); QVERIFY(bytes.size() <= Remote::MaxTargetListMessage);
+        RemoteClient app; app.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_COMPARE(app.targets().size(), 16);
+        app.claim(agents.back()->id); QTRY_COMPARE(app.selected(), agents.back()->id);
+        QCOMPARE(app.controls(), controls.toVariantMap());
+        app.press("enter"); QTRY_COMPARE(agents.back()->keys.size(), 1);
+        // Claim broadcasts another large snapshot; ownership must be retained.
+        QCOMPARE(app.selected(), agents.back()->id); QVERIFY(app.connected());
+        agents.back()->socket.abort(); QTRY_COMPARE(app.targets().size(), 15);
+        QVERIFY(app.selected().isEmpty()); QVERIFY(app.connected());
+    }
+    void largerReceiveLimitIsOnlyForTargetSnapshots() {
+        QJsonObject decoded;
+        auto message = Remote::message("targets"); message["padding"] = QString(Remote::MaxMessage, 'x');
+        const auto bytes = Remote::encode(message);
+        QVERIFY(!Remote::decode(bytes, decoded)); QVERIFY(Remote::decodeServerMessage(bytes, decoded));
+        message["type"] = "channelPage";
+        QVERIFY(!Remote::decodeServerMessage(Remote::encode(message), decoded));
+        message["type"] = "targets"; message["padding"] = QString(Remote::MaxTargetListMessage, 'x');
+        QVERIFY(!Remote::decodeServerMessage(Remote::encode(message), decoded));
+        // Remote inputs still have the original WebSocket size limit.
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Client raw(b.port()); QTRY_VERIFY(raw.has("ready"));
+        message = Remote::message("list"); message["padding"] = QString(Remote::MaxMessage, 'x');
+        raw.send(message); QTRY_COMPARE(raw.socket.state(), QAbstractSocket::UnconnectedState);
     }
     void malformedFramesAreRejected() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
