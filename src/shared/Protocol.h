@@ -9,6 +9,9 @@ inline constexpr int Version = 1;
 inline constexpr int MaxMessage = 16384;
 // Only server snapshots may contain up to 16 agents' metadata at once.
 inline constexpr int MaxTargetListMessage = 65536;
+// Unsent bytes allowed per remote before the broker drops it as too slow;
+// leaves room for several full snapshots from back-to-back target updates.
+inline constexpr int MaxClientBacklog = 4 * MaxTargetListMessage;
 inline const QString PipeName = QStringLiteral("TVTDataBroadcastingRemote-v1");
 inline QJsonObject message(const char* type) {
     return {{"v", Version}, {"type", QLatin1String(type)}};
