@@ -347,6 +347,24 @@ private slots:
         QCOMPARE(app.savedUrl(), QString("ws://192.0.2.10:18765"));
         QVERIFY(!QSettings().contains("fingerprint"));
     }
+    void failedClaimPreservesOwnedTarget() {
+        Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
+        Agent a(pipe, "A", "a"); QTRY_VERIFY(!a.id.isEmpty());
+        RemoteClient c; c.connectTo(QString("ws://127.0.0.1:%1").arg(b.port()));
+        QTRY_COMPARE(c.targets().size(), 1); c.claim(a.id); QTRY_COMPARE(c.selected(), a.id);
+        // A list entry can disappear between the user's tap and the claim.
+        c.claim("disappeared-target");
+        QTRY_COMPARE(c.status(), QStringLiteral("切り替え先のTVTestは切断されました"));
+        QCOMPARE(c.selected(), a.id);
+        QCOMPARE(QSettings().value("targetId").toString(), a.id);
+        QCOMPARE(QSettings().value("targetToken").toString(), QString("a"));
+        c.press("enter"); QTRY_COMPARE(a.keys.size(), 1);
+        c.release(); QTRY_VERIFY(c.status().contains(QStringLiteral("解放しました")));
+        QVERIFY(c.selected().isEmpty());
+        c.claim("disappeared-target");
+        QTRY_COMPARE(c.status(), QStringLiteral("TVTestの再起動を待っています"));
+        QVERIFY(c.selected().isEmpty());
+    }
     void routingOwnershipAndDisconnect() {
         Broker b; const auto pipe = pipeName(); QVERIFY(b.start(QHostAddress::LocalHost, 0, pipe));
         Agent a(pipe, "TVTest A"), other(pipe, "TVTest B");

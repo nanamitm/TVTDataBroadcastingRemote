@@ -295,15 +295,17 @@ void RemoteClient::received(const QString& text) {
         }
         else if (status == "busy") setStatus(QStringLiteral("別のリモコンが操作中です"));
         else {
-            setSelected({});
-            if (status == "target_gone" && !m_lastToken.isEmpty()) m_restorePending = m_lastTarget;
-            if (status == "identity_conflict") m_restorePending = m_lastTarget;
+            // Failed claims return the still-owned target, while a disconnected
+            // agent returns no target. Preserve the broker's selection in both cases.
+            if (m_selected.isEmpty() && ((status == "target_gone" && !m_lastToken.isEmpty())
+                || status == "identity_conflict")) m_restorePending = m_lastTarget;
             if (status == "released") {
                 m_lastTarget.clear(); m_lastToken.clear(); m_restorePending.clear();
                 QSettings settings; settings.remove("targetId"); settings.remove("targetToken"); settings.remove("targetUrl");
             }
             setStatus(status == "identity_conflict" ? QStringLiteral("操作先識別トークンが重複しています。設定を確認してください")
-                : status == "target_gone" ? QStringLiteral("TVTestの再起動を待っています") : QStringLiteral("操作権を解放しました"));
+                : status == "target_gone" ? (m_selected.isEmpty() ? QStringLiteral("TVTestの再起動を待っています")
+                    : QStringLiteral("切り替え先のTVTestは切断されました")) : QStringLiteral("操作権を解放しました"));
         }
     } else if (type == "channelDrivers") {
         if (m_channelRequest.isEmpty() || o["id"].toString() != m_channelRequest) return;
